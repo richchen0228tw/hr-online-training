@@ -376,7 +376,7 @@ function renderAdmin() {
         `;
 
         setTimeout(() => {
-            container.querySelector('#btn-login').onclick = () => {
+            const performLogin = () => {
                 const u = container.querySelector('#admin-user').value;
                 const p = container.querySelector('#admin-pass').value;
                 if (u === 'admin' && p === 'mitachr') {
@@ -387,6 +387,18 @@ function renderAdmin() {
                     container.querySelector('#login-error').style.display = 'block';
                 }
             };
+
+            container.querySelector('#btn-login').onclick = performLogin;
+
+            // Add Enter key listener
+            const inputs = container.querySelectorAll('#admin-user, #admin-pass');
+            inputs.forEach(input => {
+                input.addEventListener('keyup', (e) => {
+                    if (e.key === 'Enter') {
+                        performLogin();
+                    }
+                });
+            });
         }, 0);
         return container;
     }
