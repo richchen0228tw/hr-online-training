@@ -105,12 +105,30 @@ window.addEventListener('load', async () => {
 });
 
 // Render Functions
+// Render Functions
 function renderApp(route, id) {
     const app = document.getElementById('app');
     app.innerHTML = ''; // Clear current content
 
+    // Determines Navbar State
+    let showAdminBtn = false;
+    let enableLogoLink = true;
+
+    if (route === '#home') {
+        showAdminBtn = true;
+    }
+
+    // Special Check for Restricted Course Access
+    if (route === '#course') {
+        const course = state.courses.find(c => c.id === id);
+        // If course exists and is NOT available, strict mode active
+        if (course && !isCourseAvailable(course)) {
+            enableLogoLink = false;
+        }
+    }
+
     // Render Navbar
-    app.appendChild(createNavbar());
+    app.appendChild(createNavbar(showAdminBtn, enableLogoLink));
 
     // Render Content
     const content = document.createElement('div');
@@ -136,15 +154,24 @@ function renderApp(route, id) {
     app.appendChild(content);
 }
 
-function createNavbar() {
+function createNavbar(showAdminBtn = true, enableLogoLink = true) {
     const nav = document.createElement('nav');
     nav.className = 'navbar';
+
+    const logoHtml = enableLogoLink
+        ? '<a href="#home">MiTAC 線上學習平台</a>'
+        : '<span style="color: white; font-weight: bold; font-size: 1.2rem;">MiTAC 線上學習平台</span>';
+
+    const adminBtnHtml = showAdminBtn
+        ? '<a href="#admin" class="btn" style="background:transparent; color: var(--primary-color); border: 1px solid var(--primary-color);">管理員後台</a>'
+        : '';
+
     nav.innerHTML = `
         <div class="logo">
-            <a href="#home">MiTAC 線上學習平台</a>
+            ${logoHtml}
         </div>
         <div class="nav-links">
-            <a href="#admin" class="btn" style="background:transparent; color: var(--primary-color); border: 1px solid var(--primary-color);">管理員後台</a>
+            ${adminBtnHtml}
         </div>
     `;
     return nav;
@@ -194,7 +221,7 @@ function renderCourseDetail(id) {
     }
 
     if (!isCourseAvailable(course)) {
-        return createErrorView('非課程觀看時間，請洽HR');
+        return createErrorView('非課程觀看時間，請洽HR', false);
     }
 
     const themeColor = course.color || '#0ABAB5';
@@ -347,13 +374,16 @@ function renderCourseDetail(id) {
     return div;
 }
 
-function createErrorView(msg) {
+function createErrorView(msg, showHomeBtn = true) {
     const div = document.createElement('div');
     div.style.textAlign = 'center';
     div.style.padding = '4rem 1rem';
+
+    const btnHtml = showHomeBtn ? '<a href="#home" class="btn" style="background-color: #6c757d;">&larr; 回首頁</a>' : '';
+
     div.innerHTML = `
         <h2 style="color: #ff6b6b; margin-bottom: 2rem;">${msg}</h2>
-        <a href="#home" class="btn" style="background-color: #6c757d;">&larr; 回首頁</a>
+        ${btnHtml}
     `;
     return div;
 }
@@ -468,6 +498,7 @@ function renderAdmin() {
                 <div class="flex gap-2">
                      <button class="btn copy-link-btn" data-url="${courseUrl}" style="background: #e9ecef; color: #333; font-size: 0.9rem;">複製連結</button>
                      <button class="btn edit-btn" style="font-size: 0.9rem;">編輯</button>
+                     <button class="btn delete-btn" style="background-color: #dc3545; color: white; font-size: 0.9rem;">刪除</button>
                 </div>
             `;
 
@@ -479,6 +510,20 @@ function renderAdmin() {
                     e.target.textContent = 'Copied!';
                     setTimeout(() => e.target.textContent = originalText, 2000);
                 });
+            };
+
+            // Delete Functionality
+            row.querySelector('.delete-btn').onclick = async () => {
+                if (confirm(`確定要刪除課程「${course.title}」嗎？\n此動作無法復原。`)) {
+                    try {
+                        await deleteDoc(doc(db, "courses", course.id));
+                        await fetchCourses(); // Refresh
+                        renderAdmin(); // Re-render
+                    } catch (e) {
+                        console.error(e);
+                        alert('刪除失敗: ' + e.message);
+                    }
+                }
             };
 
             listDiv.appendChild(row);
