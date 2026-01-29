@@ -1,29 +1,28 @@
 import { db } from './firebase-config.js';
-import { collection, getDocs } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+import { collection, getDocs, addDoc, updateDoc, doc, deleteDoc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
 // State
 const state = {
     currentRoute: '',
     courses: [],
-    adminLoggedIn: false
+    adminLoggedIn: false,
+    loading: true
 };
 
-// Mock Data (Updated Structure with Types & Dates)
+// Mock Data (For Migration Only)
 const MOCK_COURSES = [
     {
-        id: '1',
         title: '個人資料保護法及案例解析',
         color: '#0ABAB5',
         startDate: '2023-01-01',
         endDate: '2030-12-31',
         parts: [
-            { type: 'video', title: 'Part1', url: 'https://www.youtube.com/embed/dQw4w9WgXcQ' }, // Example Embed
+            { type: 'video', title: 'Part1', url: 'https://www.youtube.com/embed/dQw4w9WgXcQ' },
             { type: 'video', title: 'Part2', url: '' },
             { type: 'quiz', title: '課後測驗', url: 'https://docs.google.com/forms/d/e/1FAIpQLSfD_example/viewform' }
         ]
     },
     {
-        id: '2',
         title: '資訊安全基礎',
         color: '#FF6B6B',
         startDate: '2023-01-01',
@@ -34,7 +33,6 @@ const MOCK_COURSES = [
         ]
     },
     {
-        id: '3',
         title: '企業誠信與倫理',
         color: '#4ECDC4',
         startDate: '2023-01-01',
@@ -52,12 +50,40 @@ function handleRoute() {
     const id = hash.split('/')[1];
 
     state.currentRoute = path;
-
     renderApp(path, id);
 }
 
-window.addEventListener('hashchange', handleRoute);
-window.addEventListener('load', handleRoute);
+// Data Handling
+async function fetchCourses() {
+    state.loading = true;
+    try {
+        const querySnapshot = await getDocs(collection(db, "courses"));
+        const courses = [];
+        querySnapshot.forEach((doc) => {
+            courses.push({ id: doc.id, ...doc.data() });
+        });
+
+        state.courses = courses;
+
+        // Auto Migrate if Empty
+        if (courses.length === 0) {
+            console.log('Migrating Mock Data...');
+            for (const course of MOCK_COURSES) {
+                await addDoc(collection(db, "courses"), course);
+            }
+            // Fetch again
+            return fetchCourses();
+        }
+
+    } catch (e) {
+        console.error("Error fetching courses: ", e);
+        alert("讀取課程失敗，請檢查網路或 Firebase 設定");
+    } finally {
+        state.loading = false;
+        // Re-render current route after fetch
+        handleRoute();
+    }
+}
 
 // Helper: Check Availability
 function isCourseAvailable(course) {
@@ -72,6 +98,12 @@ function isCourseAvailable(course) {
     return now >= start && now <= end;
 }
 
+// Initialization
+window.addEventListener('load', async () => {
+    window.addEventListener('hashchange', handleRoute);
+    await fetchCourses();
+});
+
 // Render Functions
 function renderApp(route, id) {
     const app = document.getElementById('app');
@@ -84,6 +116,12 @@ function renderApp(route, id) {
     const content = document.createElement('div');
     content.className = 'container fade-in';
     content.style.paddingTop = '2rem';
+
+    if (state.loading) {
+        content.innerHTML = '<h2 style="text-align:center;">載入中...</h2>';
+        app.appendChild(content);
+        return;
+    }
 
     if (route === '#home') {
         content.appendChild(renderHome());
@@ -114,21 +152,15 @@ function createNavbar() {
 
 function renderHome() {
     const section = document.createElement('div');
-
-    const header = document.createElement('div');
-    header.innerHTML = `<h1 style="text-align:center; margin-bottom: 3rem; margin-top: 2rem;">課程首頁</h1><p style="text-align:center; color:#666; margin-bottom:4rem;">請選擇單元進入學習</p>`;
-    section.appendChild(header);
+    section.innerHTML = `<h1 style="text-align:center; margin-bottom: 3rem; margin-top: 2rem;">課程首頁</h1><p style="text-align:center; color:#666; margin-bottom:4rem;">請選擇單元進入學習</p>`;
 
     const grid = document.createElement('div');
     grid.className = 'grid full-width';
     grid.style.gridTemplateColumns = 'repeat(auto-fit, minmax(300px, 1fr))';
     grid.style.gap = '2rem';
 
-    // Use Mock Data if DB Fetch fails or empty (for now)
-    const allCourses = state.courses.length > 0 ? state.courses : MOCK_COURSES;
-
-    // Filter by Date
-    const coursesToRender = allCourses.filter(c => isCourseAvailable(c));
+    // Availability Filter
+    const coursesToRender = state.courses.filter(c => isCourseAvailable(c));
 
     coursesToRender.forEach(course => {
         const card = document.createElement('div');
@@ -138,8 +170,8 @@ function renderHome() {
 
         card.innerHTML = `
             <div class="course-title">${course.title}</div>
-            <div class="course-meta">${course.parts.length} 個單元</div>
-            <div class="course-meta" style="font-size:0.8rem; margin-top:0.5rem; color:#888;">開放時間: ${course.startDate} ~ ${course.endDate}</div>
+            <div class="course-meta">${course.parts ? course.parts.length : 0} 個單元</div>
+            <div class="course-meta" style="font-size:0.8rem; margin-top:0.5rem; color:#888;">開放時間: ${course.startDate || '未設定'} ~ ${course.endDate || '未設定'}</div>
             <a href="#course/${course.id}" class="btn" style="background-color: ${course.color || '#0ABAB5'}">進入課程</a>
         `;
         grid.appendChild(card);
@@ -154,8 +186,7 @@ function renderHome() {
 }
 
 function renderCourseDetail(id) {
-    const allCourses = state.courses.length > 0 ? state.courses : MOCK_COURSES;
-    const course = allCourses.find(c => c.id === id);
+    const course = state.courses.find(c => c.id === id);
 
     // 1. Check restriction
     if (!course) {
@@ -182,16 +213,16 @@ function renderCourseDetail(id) {
                 <h2 style="margin-bottom: 1.5rem;">${course.title}</h2>
                 <div id="unit-buttons-container" class="flex" style="justify-content: center; gap: 1rem; flex-wrap: wrap;"></div>
             </div>
-            
+
             <!-- Content Area (Video or Quiz) -->
             <div id="content-display" style="
-                background: #000; 
-                min-height: 500px; 
-                display:flex; 
-                align-items:center; 
-                justify-content:center; 
-                color:white; 
-                border-radius: 8px; 
+                background: #000;
+                min-height: 500px;
+                display:flex;
+                align-items:center;
+                justify-content:center;
+                color:white;
+                border-radius: 8px;
                 overflow: hidden;
                 box-shadow: 0 4px 12px rgba(0,0,0,0.1);
             ">
@@ -226,7 +257,7 @@ function renderCourseDetail(id) {
 
     // Render Buttons
     let videoCount = 0;
-    course.parts.forEach((part, index) => {
+    (course.parts || []).forEach((part, index) => {
         const btn = document.createElement('button');
 
         // Determine Button Text and Tooltip based on Type
@@ -361,9 +392,6 @@ function renderAdmin() {
     }
 
     // 2. Admin Workspace
-    if (state.courses.length === 0) {
-        state.courses = JSON.parse(JSON.stringify(MOCK_COURSES));
-    }
     const courses = state.courses;
 
     function renderList() {
@@ -447,27 +475,36 @@ function renderAdmin() {
         card.appendChild(listDiv);
         workspace.appendChild(card);
 
-        card.querySelector('#btn-add-course').onclick = () => {
-            // Default Dates (Today to Next Year)
+        // Add Course (Sync to Firebase)
+        card.querySelector('#btn-add-course').onclick = async () => {
             const today = new Date().toISOString().split('T')[0];
             const nextYear = new Date();
             nextYear.setFullYear(nextYear.getFullYear() + 1);
-            const end = nextYear.toISOString().split('T')[0];
 
-            const newCourse = {
-                id: Date.now().toString(),
+            const newCourseData = {
                 title: '新課程',
                 color: '#0ABAB5',
                 startDate: today,
-                endDate: end,
+                endDate: nextYear.toISOString().split('T')[0],
                 parts: []
             };
-            courses.push(newCourse);
-            renderEditor(newCourse);
+
+            try {
+                await addDoc(collection(db, "courses"), newCourseData);
+                await fetchCourses(); // Refresh local state
+                renderAdmin(); // Refresh UI
+            } catch (e) {
+                console.error(e);
+                alert('建立課程失敗');
+            }
         };
     }
 
     function renderEditor(course) {
+        // Clone course to avoid mutating local state before save (optional preference, but good for "Cancel")
+        // For simplicity here, we edit a local copy and push on save.
+        let editingCourse = JSON.parse(JSON.stringify(course));
+
         const workspace = container.querySelector('#admin-workspace');
         workspace.innerHTML = '';
 
@@ -478,50 +515,29 @@ function renderAdmin() {
 
         editorCard.innerHTML = `
              <div class="flex justify-between items-center mb-4">
-                <h2>${course.title === '新課程' ? '新增課程' : '編輯課程'}</h2>
+                <h2>編輯課程</h2>
                 <button class="btn" id="btn-back-list" style="background-color: #6c757d;">&larr; 返回列表</button>
             </div>
-
             <div class="course-editor" style="border: 1px solid var(--border-color); padding: 2rem; margin-top: 2rem;">
-                
-                <div class="form-group mb-4">
-                    <label><strong>課程標題</strong></label>
-                    <input type="text" id="edit-title" value="${course.title}" />
-                </div>
-
+                <div class="form-group mb-4"><label><strong>課程標題</strong></label><input type="text" id="edit-title" value="${editingCourse.title}" /></div>
                 <div class="grid gap-4 mb-4" style="grid-template-columns: 1fr 1fr;">
-                     <div>
-                        <label><strong>開始日期</strong> (YYYY-MM-DD)</label>
-                        <input type="date" id="edit-start" value="${course.startDate || ''}" style="width:100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;" />
-                     </div>
-                     <div>
-                        <label><strong>結束日期</strong> (YYYY-MM-DD)</label>
-                        <input type="date" id="edit-end" value="${course.endDate || ''}" style="width:100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;" />
-                     </div>
+                     <div><label><strong>開始日期</strong></label><input type="date" id="edit-start" value="${editingCourse.startDate || ''}" style="width:100%; padding: 8px; border: 1px solid #ddd;" /></div>
+                     <div><label><strong>結束日期</strong></label><input type="date" id="edit-end" value="${editingCourse.endDate || ''}" style="width:100%; padding: 8px; border: 1px solid #ddd;" /></div>
                 </div>
-
                 <div class="form-group mb-4">
                      <label><strong>主題顏色</strong></label>
                      <div class="flex items-center">
-                        <input type="color" id="edit-color" value="${course.color || '#0ABAB5'}" style="height: 40px; width: 60px; padding: 0; border: none; cursor: pointer;" />
+                        <input type="color" id="edit-color" value="${editingCourse.color || '#0ABAB5'}" style="height: 40px; width: 60px; padding: 0; border: none; cursor: pointer;" />
                         <span style="margin-left: 10px; color: #666;">點擊選擇顏色</span>
                      </div>
                 </div>
-
                 <hr style="border:0; border-top:1px solid #eee; margin: 2rem 0;">
-
                 <h4>單元管理</h4>
                 <div id="unit-list-container"></div>
-                
                 <div class="flex gap-4 mt-4">
-                    <button class="btn" id="btn-add-video" style="flex:1; background: transparent; border: 2px dashed var(--primary-color); color: var(--primary-color);">
-                        + 新增單元 (影片)
-                    </button>
-                     <button class="btn" id="btn-add-quiz" style="flex:1; background: transparent; border: 2px dashed #ff6b6b; color: #ff6b6b;">
-                        + 新增課程測驗
-                    </button>
+                    <button class="btn" id="btn-add-video" style="flex:1; background: transparent; border: 2px dashed var(--primary-color); color: var(--primary-color);">+ 新增單元 (影片)</button>
+                     <button class="btn" id="btn-add-quiz" style="flex:1; background: transparent; border: 2px dashed #ff6b6b; color: #ff6b6b;">+ 新增課程測驗</button>
                 </div>
-
                 <div class="mt-4 flex justify-between">
                      <button class="btn" style="background: #ccc; color: #333;" id="btn-cancel">取消 / 返回</button>
                      <button class="btn" id="btn-save">儲存變更</button>
@@ -530,112 +546,76 @@ function renderAdmin() {
         `;
 
         const unitContainer = editorCard.querySelector('#unit-list-container');
-
         const renderUnits = () => {
             unitContainer.innerHTML = '';
-
-            // Helper to count how many "video" type units exist to name them "Unit 1", "Unit 2", etc.
             let videoCount = 0;
-
-            course.parts.forEach((part, idx) => {
+            (editingCourse.parts || []).forEach((part, idx) => {
                 if (part.type === 'video') videoCount++;
-
                 const isQuiz = part.type === 'quiz';
-                const typeLabel = isQuiz ? '測驗' : '影片單元';
-                const borderColor = isQuiz ? '#ff6b6b' : (course.color || 'var(--primary-color)');
-                const urlLabel = isQuiz ? 'Google 表單網址' : '影片網址';
-
                 const row = document.createElement('div');
-                row.style.background = 'var(--light-gray)';
-                row.style.padding = '1rem';
-                row.style.marginBottom = '1rem';
-                row.style.borderLeft = `4px solid ${borderColor}`;
+                row.style.cssText = `background:var(--light-gray); padding:1rem; margin-bottom:1rem; border-left:4px solid ${isQuiz ? '#ff6b6b' : (editingCourse.color || '#0ABAB5')}`;
 
                 row.innerHTML = `
                     <div class="flex justify-between items-center mb-2">
-                        <h5 style="margin:0;">
-                            <span style="background:${isQuiz ? '#ff6b6b' : '#666'}; color:white; padding:2px 6px; border-radius:4px; font-size:0.8rem; margin-right:8px;">${typeLabel}</span>
-                            ${part.title}
-                        </h5>
+                        <h5 style="margin:0;"><span style="background:${isQuiz ? '#ff6b6b' : '#666'}; color:white; padding:2px 6px; border-radius:4px; font-size:0.8rem; margin-right:8px;">${isQuiz ? '測驗' : '影片單元'}</span>${part.title}</h5>
                         <button class="btn btn-danger delete-unit-btn" data-idx="${idx}" style="padding: 4px 8px; font-size: 0.8rem;">刪除</button>
                     </div>
                     <div class="grid gap-4" style="grid-template-columns: 1fr 1fr;">
-                        <div>
-                            <label style="font-size:0.9rem">顯示名稱</label>
-                            <input type="text" class="unit-title-input" data-idx="${idx}" value="${part.title}" />
-                        </div>
-                        <div>
-                            <label style="font-size:0.9rem">${urlLabel}</label>
-                            <input type="text" class="unit-url-input" data-idx="${idx}" value="${part.url || ''}" placeholder="https://..." />
-                        </div>
+                        <div><label style="font-size:0.9rem">顯示名稱</label><input type="text" class="unit-title-input" data-idx="${idx}" value="${part.title}" /></div>
+                        <div><label style="font-size:0.9rem">${isQuiz ? 'Google 表單網址' : '影片網址'}</label><input type="text" class="unit-url-input" data-idx="${idx}" value="${part.url || ''}" /></div>
                     </div>
                 `;
                 unitContainer.appendChild(row);
             });
 
-            // Bind Inputs
-            unitContainer.querySelectorAll('.unit-title-input').forEach(input => {
-                input.oninput = (e) => { course.parts[e.target.dataset.idx].title = e.target.value; };
-            });
-            unitContainer.querySelectorAll('.unit-url-input').forEach(input => {
-                input.oninput = (e) => { course.parts[e.target.dataset.idx].url = e.target.value; };
-            });
-            unitContainer.querySelectorAll('.delete-unit-btn').forEach(btn => {
-                btn.onclick = (e) => {
-                    course.parts.splice(e.target.dataset.idx, 1);
-                    renderUnits();
-                };
+            // Bind inputs
+            unitContainer.querySelectorAll('.unit-title-input').forEach(i => i.oninput = (e) => editingCourse.parts[e.target.dataset.idx].title = e.target.value);
+            unitContainer.querySelectorAll('.unit-url-input').forEach(i => i.oninput = (e) => editingCourse.parts[e.target.dataset.idx].url = e.target.value);
+            unitContainer.querySelectorAll('.delete-unit-btn').forEach(btn => btn.onclick = (e) => {
+                editingCourse.parts.splice(e.target.dataset.idx, 1);
+                renderUnits();
             });
         };
 
         renderUnits();
 
-        // Add Video Unit
+        // Editor Bindings
+        editorCard.querySelector('#edit-title').oninput = (e) => editingCourse.title = e.target.value;
+        editorCard.querySelector('#edit-start').oninput = (e) => editingCourse.startDate = e.target.value;
+        editorCard.querySelector('#edit-end').oninput = (e) => editingCourse.endDate = e.target.value;
+        editorCard.querySelector('#edit-color').oninput = (e) => { editingCourse.color = e.target.value; renderUnits(); };
+
+        // Add Units
         editorCard.querySelector('#btn-add-video').onclick = () => {
-            // Count existing video units to determine next number
-            const currentVideoCount = course.parts.filter(p => p.type === 'video').length;
-            course.parts.push({
-                type: 'video',
-                title: `單元 ${currentVideoCount + 1}`,
-                url: ''
-            });
+            const vCount = editingCourse.parts.filter(p => p.type === 'video').length;
+            editingCourse.parts.push({ type: 'video', title: `單元 ${vCount + 1}`, url: '' });
             renderUnits();
         };
-
-        // Add Quiz Unit
         editorCard.querySelector('#btn-add-quiz').onclick = () => {
-            course.parts.push({
-                type: 'quiz',
-                title: '課後測驗',
-                url: ''
-            });
+            editingCourse.parts.push({ type: 'quiz', title: '課後測驗', url: '' });
             renderUnits();
         };
 
-        editorCard.querySelector('#edit-title').oninput = (e) => {
-            course.title = e.target.value;
-        };
-
-        editorCard.querySelector('#edit-start').oninput = (e) => {
-            course.startDate = e.target.value;
-        };
-
-        editorCard.querySelector('#edit-end').oninput = (e) => {
-            course.endDate = e.target.value;
-        };
-
-        editorCard.querySelector('#edit-color').oninput = (e) => {
-            course.color = e.target.value;
-            renderUnits();
-        };
-
+        // Actions
         const goBack = () => renderList();
-
         editorCard.querySelector('#btn-back-list').onclick = goBack;
         editorCard.querySelector('#btn-cancel').onclick = goBack;
-        editorCard.querySelector('#btn-save').onclick = () => {
-            alert('儲存成功！');
-            goBack();
+
+        // SAVE TO FIREBASE
+        editorCard.querySelector('#btn-save').onclick = async () => {
+            try {
+                if (confirm('確定要儲存變更嗎？')) {
+                    // Remove ID from object before saving (updateDoc takes ID separately)
+                    const { id, ...dataToSave } = editingCourse;
+                    await updateDoc(doc(db, "courses", course.id), dataToSave);
+                    await fetchCourses(); // Refresh local
+                    alert('儲存成功！');
+                    goBack();
+                }
+            } catch (e) {
+                console.error(e);
+                alert('儲存失敗: ' + e.message);
+            }
         };
 
         workspace.appendChild(editorCard);

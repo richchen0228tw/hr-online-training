@@ -5,12 +5,12 @@ import { getFirestore } from "https://www.gstatic.com/firebasejs/10.7.1/firebase
 // TODO: Replace the following with your app's Firebase project configuration
 // See: https://firebase.google.com/docs/web/setup#available-libraries
 const firebaseConfig = {
-    apiKey: "YOUR_API_KEY",
-    authDomain: "YOUR_AUTH_DOMAIN",
-    projectId: "YOUR_PROJECT_ID",
-    storageBucket: "YOUR_STORAGE_BUCKET",
-    messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
-    appId: "YOUR_APP_ID"
+    apiKey: "AIzaSyBwQ8SNvJ_VcLkN9Bx7bop8OYU4fnRlpbM",
+    authDomain: "hr-online-training.firebaseapp.com",
+    projectId: "hr-online-training",
+    storageBucket: "hr-online-training.firebasestorage.app",
+    messagingSenderId: "194233859387",
+    appId: "1:194233859387:web:4bd4b9be5a7cf4d1050b1e"
 };
 
 // Initialize Firebase
