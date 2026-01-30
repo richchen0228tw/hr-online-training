@@ -15,7 +15,7 @@ jobs:
       - name: Create firebase-config.js
         env:
           FIREBASE_CONFIG: ${{ secrets.FIREBASE_CONFIG }}
-        run: echo "$FIREBASE_CONFIG" > firebase-config.js
+        run: node -e 'const fs = require("fs"); fs.writeFileSync("firebase-config.js", process.env.FIREBASE_CONFIG);'
 
       # Remove from .gitignore so Firebase deploys it
       - name: Un-ignore firebase-config.js
