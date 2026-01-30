@@ -15,6 +15,10 @@ jobs:
       - name: Create firebase-config.js
         run: echo "${{ secrets.FIREBASE_CONFIG }}" > firebase-config.js
 
+      # Remove from .gitignore so Firebase deploys it
+      - name: Un-ignore firebase-config.js
+        run: sed -i '/firebase-config.js/d' .gitignore
+
       - uses: FirebaseExtended/action-hosting-deploy@v0
         with:
           repoToken: '${{ secrets.GITHUB_TOKEN }}'
