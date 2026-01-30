@@ -1,0 +1,16 @@
+# Netlify 配置檔案
+# 此檔案用於將 miots.netlify.app 代理到 hr-online-training.web.app
+
+[build]
+  # 發布目錄設定為 _proxy（只包含代理配置）
+  publish = "_proxy"
+  # 無需建置步驟，這只是一個代理
+  command = "echo 'No build required - this is a proxy configuration'"
+
+# 代理規則：將所有請求轉發到 Firebase Hosting
+[[redirects]]
+  from = "/*"
+  to = "https://hr-online-training.web.app/:splat"
+  status = 200
+  force = true
+  # force = true 確保即使 _proxy 目錄中有同名檔案，也會執行代理
