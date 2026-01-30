@@ -11,9 +11,11 @@ jobs:
       - uses: actions/checkout@v4
       
       # Since there is no build step (static files), we skip npm install/build
-      # Create firebase-config.js from Secret
+      # Create firebase-config.js from Secret (Safe for quotes)
       - name: Create firebase-config.js
-        run: echo "${{ secrets.FIREBASE_CONFIG }}" > firebase-config.js
+        env:
+          FIREBASE_CONFIG: ${{ secrets.FIREBASE_CONFIG }}
+        run: echo "$FIREBASE_CONFIG" > firebase-config.js
 
       # Remove from .gitignore so Firebase deploys it
       - name: Un-ignore firebase-config.js
