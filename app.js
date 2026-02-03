@@ -2007,13 +2007,13 @@ function renderAdmin() {
                 if (part.type === 'video') videoCount++;
                 const isQuiz = part.type === 'quiz';
                 const row = document.createElement('div');
-                row.style.cssText = `background: var(--light - gray); padding: 1rem; margin - bottom: 1rem; border - left: 4px solid ${isQuiz ? '#ff6b6b' : (editingCourse.color || '#0ABAB5')} `;
+                row.style.cssText = `background: var(--light-gray); padding: 1rem; margin-bottom: 1rem; border-left: 4px solid ${isQuiz ? '#ff6b6b' : (editingCourse.color || '#0ABAB5')}`;
 
                 row.innerHTML = `
-                        < div class="flex justify-between items-center mb-2" >
+                        <div class="flex justify-between items-center mb-2">
                         <h5 style="margin:0;"><span style="background:${isQuiz ? '#ff6b6b' : '#666'}; color:white; padding:2px 6px; border-radius:4px; font-size:0.8rem; margin-right:8px;">${isQuiz ? '測驗' : '影片單元'}</span>${part.title}</h5>
                         <button class="btn btn-danger delete-unit-btn" data-idx="${idx}" style="padding: 4px 8px; font-size: 0.8rem;">刪除</button>
-                    </div >
+                    </div>
                         <div class="grid gap-4" style="grid-template-columns: 1fr 1fr;">
                             <div><label style="font-size:0.9rem">顯示名稱</label><input type="text" class="unit-title-input" data-idx="${idx}" value="${part.title}" /></div>
                             <div><label style="font-size:0.9rem">${isQuiz ? 'Google 表單網址' : '影片網址'}</label><input type="text" class="unit-url-input" data-idx="${idx}" value="${part.url || ''}" /></div>
