@@ -2431,10 +2431,12 @@ function renderAdmin() {
                                         
                                         <div class="quiz-instruction-box" style="display:none; margin-top:0.5rem; padding:0.8rem; background:#fff; border:1px solid #17a2b8; border-radius:4px; font-size:0.85rem; color:#555; box-shadow: 0 2px 5px rgba(0,0,0,0.05);">
                                             <strong style="color:#17a2b8;">💡 Google 表單設定步驟：</strong>
-                                            <div style="margin-top:0.5rem; line-height:1.5;">
-                                                Google 表單的「<strong>設定</strong>」->「<strong>簡報</strong>」->「<strong>確認訊息</strong>」->「<strong>編輯</strong>」，<br>
-                                                填寫：「感謝您的填寫，您的完成驗證碼為：<strong>Pass123(自己設定</strong>」->「<strong>儲存</strong>」
-                                            </div>
+                                            <ol style="padding-left:1.2rem; margin:0.5rem 0;">
+                                                <li>在表單新增「<strong>簡答題</strong>」。</li>
+                                                <li>點擊題目右下角選單 (⋮)，勾選「<strong>回應驗證</strong>」。</li>
+                                                <li>設定規則：<strong>數字</strong> > <strong>等於</strong> > <strong>您的驗證碼</strong>。</li>
+                                                <li>設定自訂錯誤文字 (例如：驗證碼錯誤，請看完影片)。</li>
+                                            </ol>
                                         </div>
                                     </div>
                                 ` : ''}

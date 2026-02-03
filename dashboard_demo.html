@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Behavioral-Interest Dashboard Demo</title>
+    <!-- Use Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --card-bg: rgba(30, 41, 59, 0.7);
+            --accent-color: #38bdf8;
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            --success: #4ade80;
+            --warning: #fbbf24;
+            --danger: #f87171;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-primary);
+            margin: 0;
+            padding: 2rem;
+            height: 100vh;
+            box-sizing: border-box;
+            background-image:
+                radial-gradient(circle at 10% 20%, rgba(56, 189, 248, 0.1) 0%, transparent 20%),
+                radial-gradient(circle at 90% 80%, rgba(168, 85, 247, 0.1) 0%, transparent 20%);
+        }
+
+        h1 {
+            font-weight: 800;
+            margin-bottom: 2rem;
+            letter-spacing: -0.05em;
+            background: linear-gradient(90deg, #fff, #94a3b8);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .container {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 2rem;
+            height: calc(100% - 100px);
+        }
+
+        /* Player Section */
+        .player-section {
+            background: var(--card-bg);
+            border-radius: 1rem;
+            padding: 1rem;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+
+        video {
+            width: 100%;
+            height: auto;
+            border-radius: 0.5rem;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5);
+        }
+
+        .interaction-bar {
+            margin-top: 1rem;
+            display: flex;
+            gap: 1rem;
+            width: 100%;
+        }
+
+        .btn {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: white;
+            padding: 0.5rem 1rem;
+            border-radius: 0.5rem;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-size: 0.9rem;
+        }
+
+        .btn:hover {
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        .btn-primary {
+            background: var(--accent-color);
+            color: #000;
+            font-weight: 600;
+        }
+
+        .btn-primary:hover {
+            opacity: 0.9;
+            background: var(--accent-color);
+        }
+
+        /* Dashboard Section */
+        .dashboard-section {
+            display: grid;
+            grid-template-rows: auto 1fr;
+            gap: 1rem;
+        }
+
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
+        }
+
+        .metric-card {
+            background: var(--card-bg);
+            border-radius: 1rem;
+            padding: 1.5rem;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .metric-title {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 0.5rem;
+        }
+
+        .metric-value {
+            font-size: 2rem;
+            font-weight: 700;
+        }
+
+        .metric-sub {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            margin-top: 0.25rem;
+            display: flex;
+            align-items: center;
+            gap: 0.25rem;
+        }
+
+        .logs-panel {
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 1rem;
+            padding: 1rem;
+            font-family: 'Courier New', monospace;
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            overflow-y: auto;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .log-entry {
+            margin-bottom: 0.5rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .log-time {
+            color: var(--accent-color);
+        }
+
+        .log-action {
+            color: #fff;
+            font-weight: bold;
+        }
+
+        /* Indicators */
+        .good {
+            color: var(--success);
+        }
+
+        .bad {
+            color: var(--danger);
+        }
+
+        .badge {
+            font-size: 0.7rem;
+            padding: 0.2rem 0.5rem;
+            border-radius: 1rem;
+            background: rgba(255, 255, 255, 0.1);
+            margin-left: auto;
+        }
+
+        .pulse {
+            animation: pulse-animation 2s infinite;
+        }
+
+        @keyframes pulse-animation {
+            0% {
+                box-shadow: 0 0 0 0 rgba(74, 222, 128, 0.4);
+            }
+
+            70% {
+                box-shadow: 0 0 0 10px rgba(74, 222, 128, 0);
+            }
+
+            100% {
+                box-shadow: 0 0 0 0 rgba(74, 222, 128, 0);
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+    <h1>Behavioral-Interest Dashboard <span
+            style="font-size: 0.5em; vertical-align: middle; padding: 5px 10px; background: rgba(255,255,255,0.1); border-radius: 20px;">No-Social
+            Logic</span></h1>
+
+    <div class="container">
+        <!-- PLAYER -->
+        <div class="player-section">
+            <video id="demoVideo" controls
+                poster="https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/images/BigBuckBunny.jpg">
+                <source src="https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
+                    type="video/mp4">
+                Your browser does not support the video tag.
+            </video>
+
+            <div class="interaction-bar">
+                <button class="btn" onclick="triggerDownload()">
+                    📄 Download Attachment
+                </button>
+                <button class="btn" onclick="triggerRelated()">
+                    🔗 Click Related Link
+                </button>
+                <div
+                    style="margin-left: auto; font-size: 0.9rem; color: #94a3b8; display: flex; align-items: center; gap: 10px;">
+                    <span>Current Speed: <b id="speedDisplay" style="color:white">1.0x</b></span>
+                </div>
+            </div>
+            <div style="margin-top: 1rem; font-size: 0.8rem; color: #64748b;">
+                Tip: Try <b>Rewinding >5s</b> (Interest), <b>Speed >1.5x</b> (Penalty), or <b>Pausing</b>.
+            </div>
+        </div>
+
+        <!-- DASHBOARD -->
+        <div class="dashboard-section">
+
+            <div class="metrics-grid">
+                <!-- TES -->
+                <div class="metric-card" id="tes-card">
+                    <div class="metric-title">True Engagement Score (TES)</div>
+                    <div class="metric-value">0.00</div>
+                    <div class="metric-sub">
+                        <span id="speed-status">Standard Rate</span>
+                    </div>
+                </div>
+
+                <!-- Seek Back -->
+                <div class="metric-card">
+                    <div class="metric-title">Seek-back Rate (Interest)</div>
+                    <div class="metric-value" id="seek-count">0</div>
+                    <div class="metric-sub">
+                        Rewinds > 5s
+                    </div>
+                </div>
+
+                <!-- Stickiness -->
+                <div class="metric-card">
+                    <div class="metric-title">Drop-off Point</div>
+                    <div class="metric-value" id="drop-off">--:--</div>
+                    <div class="metric-sub">Last active timestamp</div>
+                </div>
+
+                <!-- Interaction -->
+                <div class="metric-card">
+                    <div class="metric-title">Interactions</div>
+                    <div class="metric-value" id="interaction-count">0</div>
+                    <div class="metric-sub">Downloads / Clicks</div>
+                </div>
+            </div>
+
+            <!-- LOGS -->
+            <div class="logs-panel" id="eventLogs">
+                <div class="log-entry">Waiting for events...</div>
+            </div>
+
+        </div>
+    </div>
+
+    <!-- SCRIPTS -->
+    <script src="behavioral_tracking.js"></script>
+    <script src="metrics_engine.js"></script>
+    <script>
+        // --- Initialization ---
+        const video = document.getElementById('demoVideo');
+        const tracker = new BehavioralTracker({ debug: true });
+        const engine = new MetricsEngine();
+
+        // UI Elements
+        const elTES = document.querySelector('#tes-card .metric-value');
+        const elSeekCount = document.getElementById('seek-count');
+        const elDropOff = document.getElementById('drop-off');
+        const elInteraction = document.getElementById('interaction-count');
+        const elLogs = document.getElementById('eventLogs');
+        const elSpeedDisplay = document.getElementById('speedDisplay');
+        const elSpeedStatus = document.getElementById('speed-status');
+        const elTESCard = document.getElementById('tes-card');
+
+        // Connect Components
+        tracker.attachToVideoElement(video);
+
+        tracker.onEventTracked = (event) => {
+            // feed to engine
+            engine.processEvent(event);
+            logEvent(event);
+            updateDashboard(false); // Immediate update on event
+        };
+
+        // Simulated Ticker for TES accumulation (every 1s)
+        setInterval(() => {
+            if (!video.paused && !video.ended && video.readyState > 2) {
+                engine.tick(true, video.currentTime, video.playbackRate);
+                updateDashboard(true);
+            }
+        }, 1000);
+
+        // --- UI Updates ---
+        function updateDashboard(isTick) {
+            const metrics = engine.getMetrics();
+
+            // TES
+            elTES.innerText = metrics.trueEngagementScore.toFixed(2);
+
+            // Visual feedback for speed penalty
+            const rate = video.playbackRate;
+            elSpeedDisplay.innerText = rate + 'x';
+            if (rate >= 2.0) {
+                elSpeedStatus.innerText = "⚠️ Penalty (0.3x)";
+                elSpeedStatus.className = "metric-sub bad";
+                elTESCard.style.borderColor = "var(--danger)";
+            } else if (rate === 1.5) {
+                elSpeedStatus.innerText = "⚠️ Discount (0.8x)";
+                elSpeedStatus.className = "metric-sub warning";
+                elTESCard.style.borderColor = "var(--warning)";
+            } else {
+                elSpeedStatus.innerText = "✅ Standard Accumulation";
+                elSpeedStatus.className = "metric-sub good";
+                elTESCard.style.borderColor = "rgba(255, 255, 255, 0.1)";
+            }
+
+            // Seeks
+            elSeekCount.innerText = metrics.seekBackCount;
+            if (metrics.seekBackCount > 0) {
+                elSeekCount.style.color = "var(--success)";
+            }
+
+            // Drop-off
+            if (metrics.dropOffTime !== null) {
+                elDropOff.innerText = formatTime(metrics.dropOffTime);
+            }
+
+            // Interactions
+            elInteraction.innerText = metrics.interactionCount;
+        }
+
+        function logEvent(event) {
+            const div = document.createElement('div');
+            div.className = 'log-entry';
+            const time = new Date(event.timestamp).toLocaleTimeString();
+            const payloadStr = JSON.stringify(event.payload).replace(/"/g, '').slice(0, 50) + '...';
+
+            div.innerHTML = `
+                <span class="log-time">[${time}]</span> 
+                <span class="log-action">${event.event_name}</span> 
+                <span style="color:#64748b">${payloadStr}</span>
+            `;
+            elLogs.prepend(div);
+        }
+
+        // --- Helpers ---
+        function formatTime(seconds) {
+            const m = Math.floor(seconds / 60);
+            const s = Math.floor(seconds % 60);
+            return `${m}:${s.toString().padStart(2, '0')}`;
+        }
+
+        // --- Manual Triggers ---
+        window.triggerDownload = function () {
+            tracker.trackInteraction('download_attachment', 'pdf_123', 'pdf');
+        }
+        window.triggerRelated = function () {
+            tracker.trackInteraction('click_related_link', 'link_456', 'internal_link');
+        }
+
+    </script>
+</body>
+
+</html>
