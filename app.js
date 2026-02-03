@@ -161,6 +161,11 @@ function canUserViewCourse(course, userId) {
         return true;
     }
 
+    // Admin Override: Admins can see all on-air courses
+    if (state.adminLoggedIn) {
+        return true;
+    }
+
     // If specific users are allowed, must be logged in
     if (!userId) return false;
 
@@ -500,7 +505,12 @@ function createNavbar(showAdminBtn = false, enableLogoLink = false) {
 
 
     // Logo Logic: 總是顯示為連結，並使用 CSS 定義的顏色
-    const logoHtml = '<a href="#home">MiTAC 線上學習平台</a>';
+    const logoHtml = `
+        <a href="#home" style="display: flex; align-items: center; text-decoration: none; color: inherit;">
+            <img src="images/logo.png" alt="MiTAC Logo" style="height: 40px; width: auto; margin-right: 10px;">
+            MiTAC 線上學習平台
+        </a>
+    `;
 
     const userInfo = state.currentUser
         ? `<span style="color: #666; margin-right: 1rem;">👤 ${state.currentUser.userName}</span>`
@@ -538,7 +548,13 @@ function createNavbar(showAdminBtn = false, enableLogoLink = false) {
         if (logoutBtn) {
             logoutBtn.onclick = () => {
                 if (confirm('確定要登出嗎？')) {
+                    // Prevent flash of content by setting loading and clearing state
+                    state.loading = true;
+                    state.currentUser = null;
+                    state.adminLoggedIn = false;
+
                     sessionStorage.removeItem('hr_training_user');
+                    window.location.hash = '#home'; // Force redirect to home
                     window.location.reload();
                 }
             };
@@ -617,11 +633,13 @@ async function renderCourseDetail(id) {
     }
 
     // 2. Check User Permission
-    if (course.allowedUserIds && course.allowedUserIds.length > 0) {
-        const userId = state.currentUser ? state.currentUser.userId : null;
-        if (!userId || !course.allowedUserIds.includes(userId)) {
-            return createErrorView('您沒有權限觀看此課程');
-        }
+    const canView = ((course.allowedUserIds && course.allowedUserIds.length > 0) ?
+        (state.adminLoggedIn || (state.currentUser && course.allowedUserIds.includes(state.currentUser.userId))) :
+        true
+    );
+
+    if (!canView) {
+        return createErrorView('您沒有權限觀看此課程');
     }
 
     const themeColor = course.color || '#0ABAB5';
