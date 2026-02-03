@@ -1695,11 +1695,15 @@ function renderAdmin() {
             card.innerHTML = `
                 <div class="flex justify-between items-center mb-4">
                      <h2 style="margin:0;">學員管理 (${userList.length} 人)</h2>
+                     <button class="btn" id="btn-batch-delete-users" style="background-color: #dc3545; display: none;">🗑️ 刪除所選學員</button>
                 </div>
                 <div style="overflow-x: auto;">
                     <table style="width: 100%; border-collapse: collapse;">
                         <thead>
                             <tr style="background: #f8f9fa; border-bottom: 2px solid #eee;">
+                                <th style="padding: 1rem; text-align: left;">
+                                    <input type="checkbox" id="user-select-all" style="cursor: pointer; transform: scale(1.3);">
+                                </th>
                                 <th style="padding: 1rem; text-align: left;">員工編號</th>
                                 <th style="padding: 1rem; text-align: left;">姓名</th>
                                 <th style="padding: 1rem; text-align: left;">Email</th>
@@ -1711,13 +1715,17 @@ function renderAdmin() {
                         <tbody>
                             ${userList.map(u => `
                                 <tr style="border-bottom: 1px solid #eee;">
+                                    <td style="padding: 1rem;">
+                                        <input type="checkbox" class="user-checkbox" value="${u.userId}" style="cursor: pointer; transform: scale(1.3);">
+                                    </td>
                                     <td style="padding: 1rem;">${u.userId}</td>
                                     <td style="padding: 1rem;">${u.userName}</td>
                                     <td style="padding: 1rem;">${u.email || '-'}</td>
                                     <td style="padding: 1rem;">${u.courses.length}</td>
                                     <td style="padding: 1rem; color: #666;">${u.lastActive ? new Date(u.lastActive).toLocaleString('zh-TW') : '-'}</td>
-                                    <td style="padding: 1rem;">
+                                    <td style="padding: 1rem; display: flex; gap: 0.5rem;">
                                         <button class="btn edit-user-btn" data-userid="${u.userId}" style="padding: 4px 12px; font-size: 0.85rem;">編輯</button>
+                                        <button class="btn delete-user-btn" data-userid="${u.userId}" data-username="${u.userName}" style="padding: 4px 12px; font-size: 0.85rem; background-color: #dc3545; color: white;">刪除</button>
                                     </td>
                                 </tr>
                             `).join('')}
@@ -1735,6 +1743,71 @@ function renderAdmin() {
                 };
             });
 
+            // Bind Delete Buttons (Single)
+            card.querySelectorAll('.delete-user-btn').forEach(btn => {
+                btn.onclick = async () => {
+                    const userId = btn.dataset.userid;
+                    const userName = btn.dataset.username;
+                    if (confirm(`確定要刪除學員「${userName} (${userId})」嗎？\n此動作將一併刪除該學員的所有學習紀錄，且無法復原。`)) {
+                        try {
+                            await deleteUser(userId);
+                            renderUserManagement(); // Reload
+                        } catch (e) {
+                            alert('刪除失敗: ' + e.message);
+                        }
+                    }
+                };
+            });
+
+            // Bind Checkbox Logic
+            const selectAllCb = card.querySelector('#user-select-all');
+            const rowCbs = card.querySelectorAll('.user-checkbox');
+            const batchDeleteBtn = card.querySelector('#btn-batch-delete-users');
+
+            const updateBatchBtn = () => {
+                const checkedCount = card.querySelectorAll('.user-checkbox:checked').length;
+                batchDeleteBtn.style.display = checkedCount > 0 ? 'block' : 'none';
+                batchDeleteBtn.textContent = `🗑️ 刪除所選學員 (${checkedCount})`;
+            };
+
+            selectAllCb.onchange = (e) => {
+                rowCbs.forEach(cb => cb.checked = e.target.checked);
+                updateBatchBtn();
+            };
+
+            rowCbs.forEach(cb => {
+                cb.onchange = () => {
+                    updateBatchBtn();
+                    // Update header cb state
+                    const allChecked = Array.from(rowCbs).every(c => c.checked);
+                    selectAllCb.checked = allChecked;
+                };
+            });
+
+            // Bind Batch Delete Button
+            batchDeleteBtn.onclick = async () => {
+                const selectedIds = Array.from(card.querySelectorAll('.user-checkbox:checked')).map(cb => cb.value);
+                if (selectedIds.length === 0) return;
+
+                if (confirm(`確定要刪除選取的 ${selectedIds.length} 位學員嗎？\n這些學員的學習紀錄也將一併刪除，且無法復原。`)) {
+                    try {
+                        const btnText = batchDeleteBtn.textContent;
+                        batchDeleteBtn.disabled = true;
+                        batchDeleteBtn.textContent = '刪除中...';
+
+                        await batchDeleteUsers(selectedIds);
+
+                        renderUserManagement(); // Reload
+                        alert('批次刪除成功！');
+                    } catch (e) {
+                        console.error(e);
+                        alert('批次刪除部分或全部失敗: ' + e.message);
+                        batchDeleteBtn.disabled = false;
+                        renderUserManagement(); // Check what's left
+                    }
+                }
+            };
+
             workspace.innerHTML = '';
             workspace.appendChild(card);
 
@@ -1742,6 +1815,28 @@ function renderAdmin() {
             console.error(e);
             workspace.innerHTML = `<p style="color:red; text-align:center;">讀取失敗: ${e.message}</p>`;
         }
+
+    }
+
+    async function deleteUser(userId) {
+        // 1. Delete user document
+        await deleteDoc(doc(db, "users", userId));
+
+        // 2. Delete user progress documents
+        // Need to query all progress documents for this user
+        const q = query(collection(db, 'userProgress'), where('userId', '==', userId));
+        const snapshot = await getDocs(q);
+        const deletePromises = [];
+        snapshot.forEach(docSnap => {
+            deletePromises.push(deleteDoc(doc(db, 'userProgress', docSnap.id)));
+        });
+        await Promise.all(deletePromises);
+    }
+
+    async function batchDeleteUsers(userIds) {
+        // Parallel delete
+        const promises = userIds.map(id => deleteUser(id));
+        await Promise.all(promises);
     }
 
     function renderUserEditor(user) {
@@ -2084,7 +2179,7 @@ function renderAdmin() {
 
         // Build course selection options
         let courseOptionsHTML = courses.map(course => `
-                        < label style = "display: block; margin-bottom: 0.75rem; cursor: pointer;" >
+                        <label style="display: block; margin-bottom: 0.75rem; cursor: pointer;">
                             <input type="checkbox" class="export-course" value="${course.id}" checked>
                                 <span style="margin-left: 0.5rem; display: inline-flex; align-items: center;">
                                     <span style="display: inline-block; width: 12px; height: 12px; border-radius: 50%; background: ${course.color || '#0ABAB5'}; margin-right: 0.5rem;"></span>
@@ -2094,10 +2189,10 @@ function renderAdmin() {
                     `).join('');
 
         dialog.innerHTML = `
-                        < div style = "margin-bottom: 1.5rem;" >
+            <div style="margin-bottom: 1.5rem;">
                 <h2 style="margin: 0 0 0.5rem 0;">匯出課程紀錄</h2>
                 <p style="color: #666; font-size: 0.9rem;">請選擇要匯出的課程與欄位</p>
-            </div >
+            </div>
             
             <div style="border: 1px solid #ddd; padding: 1.5rem; border-radius: 4px; margin-bottom: 1.5rem; background: #f8f9fa;">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
