@@ -15,6 +15,7 @@ const state = {
 // YouTube Player Management
 let currentYouTubePlayer = null;
 let youtubeSaveInterval = null;
+let youtubeRestrictionInterval = null;
 let isYouTubeAPIReady = false;
 
 // YouTube API Ready Callback
@@ -50,6 +51,10 @@ function cleanupYouTubePlayer() {
     if (youtubeSaveInterval) {
         clearInterval(youtubeSaveInterval);
         youtubeSaveInterval = null;
+    }
+    if (youtubeRestrictionInterval) {
+        clearInterval(youtubeRestrictionInterval);
+        youtubeRestrictionInterval = null;
     }
     if (currentYouTubePlayer) {
         try {
@@ -526,7 +531,8 @@ function createNavbar(showAdminBtn = false, enableLogoLink = false) {
         : '';
 
     // 登出按鈕：只要有登入就顯示
-    const logoutBtnHtml = state.currentUser
+    // 登出按鈕：只要有登入就顯示 (一般使用者或管理員)
+    const logoutBtnHtml = (state.currentUser || state.adminLoggedIn)
         ? `<button id="btn-logout" class="btn" style="background:#f44336; color: white; border: none; padding: 0.5rem 1rem;">登出</button>`
         : '';
 
@@ -821,6 +827,27 @@ async function renderCourseDetail(id) {
         function onPlayerReady(event) {
             console.log(`[YouTube] 播放器就緒，從 ${savedPosition.toFixed(1)}秒 開始播放`);
 
+            // 初始化最大觀看時間 (禁止快轉用)
+            let maxViewedTime = savedPosition;
+
+            // 啟動限制快轉檢查 (每 0.5 秒)
+            youtubeRestrictionInterval = setInterval(() => {
+                if (state.adminLoggedIn || !currentYouTubePlayer || !currentYouTubePlayer.getCurrentTime) return;
+
+                const currentTime = currentYouTubePlayer.getCurrentTime();
+                // 允許 2 秒緩衝 (避免網路延遲或計時誤差導致的誤判)
+                if (currentTime > maxViewedTime + 2) {
+                    console.log(`[YouTube] 禁止快轉: 目前 ${currentTime.toFixed(1)} > 最大 ${maxViewedTime.toFixed(1)}`);
+                    currentYouTubePlayer.seekTo(maxViewedTime, true);
+                    // 可選: 顯示提示訊息
+                } else {
+                    // 正常播放，更新最大觀看時間
+                    if (currentTime > maxViewedTime) {
+                        maxViewedTime = currentTime;
+                    }
+                }
+            }, 500);
+
             // 每 10 秒自動儲存進度
             youtubeSaveInterval = setInterval(async () => {
                 if (currentYouTubePlayer && currentYouTubePlayer.getCurrentTime) {
@@ -1075,10 +1102,27 @@ async function renderCourseDetail(id) {
 
                                     // 恢復上次播放位置
                                     const lastPos = unitProgressData[index].lastPosition || 0;
+                                    let maxViewedTime = lastPos; // 初始化最大觀看時間
+
                                     if (lastPos > 0 && lastPos < video.duration) {
                                         video.currentTime = lastPos;
                                         console.log(`[進度追蹤] 恢復播放位置: ${lastPos.toFixed(1)}秒`);
                                     }
+
+                                    // 限制快轉功能 (僅針對非管理員)
+                                    video.addEventListener('timeupdate', () => {
+                                        if (state.adminLoggedIn) return;
+
+                                        // 允許 2 秒緩衝
+                                        if (video.currentTime > maxViewedTime + 2) {
+                                            console.log(`[Video] 禁止快轉: ${video.currentTime.toFixed(1)} > ${maxViewedTime.toFixed(1)}`);
+                                            video.currentTime = maxViewedTime;
+                                        } else {
+                                            if (video.currentTime > maxViewedTime) {
+                                                maxViewedTime = video.currentTime;
+                                            }
+                                        }
+                                    });
                                 });
 
                                 // 開始播放時啟動自動儲存
@@ -1481,7 +1525,6 @@ function renderAdmin() {
             <div class="container">
                 <div class="flex justify-between items-center mb-4">
                     <h1 style="margin:0;">後台管理系統</h1>
-                    <button id="btn-logout" class="btn" style="background: rgba(255,255,255,0.1); border: 1px solid white;">登出</button>
                 </div>
                 <div class="flex gap-2">
                     <button id="tab-courses" class="btn" style="${state.adminViewMode === 'courses' ? 'background:white; color:var(--primary-color);' : 'background:transparent; color:white; border:1px solid white;'}">課程列表</button>
@@ -1492,20 +1535,6 @@ function renderAdmin() {
         <div id="admin-workspace" class="container mt-4 mb-4"></div>
         `;
 
-        container.querySelector('#btn-logout').onclick = () => {
-            if (confirm('確定要登出嗎？')) {
-                // Prevent routing logic from triggering when we clear the hash
-                window.removeEventListener('hashchange', handleRoute);
-
-                state.adminLoggedIn = false;
-                // Clear app content immediately to prevent flashing frontend before reload
-                document.getElementById('app').innerHTML = '';
-
-                // Reset URL to root and reload
-                window.location.hash = '';
-                window.location.reload();
-            }
-        };
         container.querySelector('#tab-courses').onclick = () => { state.adminViewMode = 'courses'; renderApp('#admin'); };
         container.querySelector('#tab-users').onclick = () => { state.adminViewMode = 'users'; renderApp('#admin'); };
     }
