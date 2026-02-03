@@ -2177,16 +2177,35 @@ function renderAdmin() {
         const dialog = document.createElement('div');
         dialog.style.cssText = 'background: white; padding: 2rem; border-radius: 8px; max-width: 600px; width: 90%; max-height: 80vh; overflow-y: auto;';
 
-        // Build course selection options
-        let courseOptionsHTML = courses.map(course => `
-                        <label style="display: block; margin-bottom: 0.75rem; cursor: pointer;">
-                            <input type="checkbox" class="export-course" value="${course.id}" checked>
-                                <span style="margin-left: 0.5rem; display: inline-flex; align-items: center;">
-                                    <span style="display: inline-block; width: 12px; height: 12px; border-radius: 50%; background: ${course.color || '#0ABAB5'}; margin-right: 0.5rem;"></span>
-                                    ${course.title}
-                                </span>
-                            </label>
-                    `).join('');
+        // 1. Get Unique Years
+        const years = Array.from(new Set(courses.map(c => {
+            if (!c.startDate) return '未設定';
+            try {
+                return new Date(c.startDate).getFullYear().toString();
+            } catch (e) { return '未設定'; }
+        }))).sort().reverse();
+
+        // 2. Build course selection options with data-year attribute
+        let courseOptionsHTML = courses.map(course => {
+            let year = '未設定';
+            if (course.startDate) {
+                try {
+                    year = new Date(course.startDate).getFullYear().toString();
+                } catch (e) { }
+            }
+            return `
+                <div class="course-option-wrapper" data-year="${year}">
+                    <label style="display: block; margin-bottom: 0.75rem; cursor: pointer;">
+                        <input type="checkbox" class="export-course" value="${course.id}" checked>
+                        <span style="margin-left: 0.5rem; display: inline-flex; align-items: center;">
+                            <span style="display: inline-block; width: 12px; height: 12px; border-radius: 50%; background: ${course.color || '#0ABAB5'}; margin-right: 0.5rem;"></span>
+                            ${course.title}
+                            <span style="color: #999; font-size: 0.8rem; margin-left: 0.5rem;">(${year})</span>
+                        </span>
+                    </label>
+                </div>
+            `;
+        }).join('');
 
         dialog.innerHTML = `
             <div style="margin-bottom: 1.5rem;">
@@ -2197,7 +2216,11 @@ function renderAdmin() {
             <div style="border: 1px solid #ddd; padding: 1.5rem; border-radius: 4px; margin-bottom: 1.5rem; background: #f8f9fa;">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
                     <h4 style="margin: 0;">選擇課程</h4>
-                    <div style="display: flex; gap: 0.5rem;">
+                    <div style="display: flex; gap: 0.5rem; align-items: center;">
+                        <select id="export-year-filter" style="padding: 4px; border-radius: 4px; border: 1px solid #ddd; font-size: 0.85rem; margin-right: 0.5rem;">
+                            <option value="all">所有年份</option>
+                            ${years.map(y => `<option value="${y}">${y} 年</option>`).join('')}
+                        </select>
                         <button id="btn-select-all-courses" class="btn" style="padding: 4px 12px; font-size: 0.85rem; background: transparent; border: 1px solid #0ABAB5; color: #0ABAB5;">全選</button>
                         <button id="btn-deselect-all-courses" class="btn" style="padding: 4px 12px; font-size: 0.85rem; background: transparent; border: 1px solid #6c757d; color: #6c757d;">取消全選</button>
                     </div>
@@ -2277,12 +2300,41 @@ function renderAdmin() {
         modal.onclick = (e) => { if (e.target === modal) closeModal(); };
         dialog.querySelector('#btn-cancel-export').onclick = closeModal;
 
+        // Year Filter Logic
+        const filterSelect = dialog.querySelector('#export-year-filter');
+        const courseWrappers = dialog.querySelectorAll('.course-option-wrapper');
+
+        filterSelect.onchange = (e) => {
+            const selectedYear = e.target.value;
+            courseWrappers.forEach(wrapper => {
+                if (selectedYear === 'all' || wrapper.dataset.year === selectedYear) {
+                    wrapper.style.display = 'block';
+                } else {
+                    wrapper.style.display = 'none';
+                }
+            });
+        };
+
         // Course selection handlers
         dialog.querySelector('#btn-select-all-courses').onclick = () => {
-            dialog.querySelectorAll('.export-course').forEach(cb => cb.checked = true);
+            // Only select visible
+            let visibleCount = 0;
+            courseWrappers.forEach(wrapper => {
+                if (wrapper.style.display !== 'none') {
+                    const cb = wrapper.querySelector('.export-course');
+                    cb.checked = true;
+                    visibleCount++;
+                }
+            });
         };
         dialog.querySelector('#btn-deselect-all-courses').onclick = () => {
-            dialog.querySelectorAll('.export-course').forEach(cb => cb.checked = false);
+            // Only deselect visible
+            courseWrappers.forEach(wrapper => {
+                if (wrapper.style.display !== 'none') {
+                    const cb = wrapper.querySelector('.export-course');
+                    cb.checked = false;
+                }
+            });
         };
 
         // Export handler
