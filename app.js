@@ -7,7 +7,9 @@ const state = {
     courses: [],
     adminLoggedIn: false,
     loading: true,
-    currentUser: null // { userId, userName }
+    currentUser: null, // { userId, userName }
+    adminViewMode: 'courses', // 'courses' or 'users'
+    adminSortBy: 'openDate'   // 'openDate' or 'actualDate'
 };
 
 // YouTube Player Management
@@ -135,7 +137,7 @@ async function fetchCourses() {
     }
 }
 
-// Helper: Check Availability
+// Helper: Check Availability (Date only)
 function isCourseAvailable(course) {
     if (!course.startDate || !course.endDate) return true; // Default to available if not set
     const now = new Date();
@@ -146,6 +148,24 @@ function isCourseAvailable(course) {
     end.setHours(23, 59, 59, 999);
 
     return now >= start && now <= end;
+}
+
+// Helper: Check Permission (Date + User ID)
+function canUserViewCourse(course, userId) {
+    // 1. Check Date Availability
+    if (!isCourseAvailable(course)) return false;
+
+    // 2. Check User Permission
+    // If no specific users are allowed, it's open to everyone
+    if (!course.allowedUserIds || course.allowedUserIds.length === 0) {
+        return true;
+    }
+
+    // If specific users are allowed, must be logged in
+    if (!userId) return false;
+
+    // Check if user is in the allowed list
+    return course.allowedUserIds.includes(userId);
 }
 
 // ============== 使用者識別模組 ==============
@@ -174,15 +194,19 @@ function showUserDialog() {
                 <h2 style="margin-bottom: 1.5rem; color: var(--primary-color);">歡迎使用線上學習平台</h2>
                 <p style="margin-bottom: 2rem; color: #666;">請輸入您的資訊以開始學習</p>
                 <div class="form-group">
-                    <label>員工編號 *</label>
-                    <input type="text" id="user-id" placeholder="例如: EMP001" required />
+                    <label>員工編號 (4碼) *</label>
+                    <input type="text" id="user-id" placeholder="0000" required />
                 </div>
                 <div class="form-group">
-                    <label>姓名 *</label>
+                    <label>中文姓名 *</label>
                     <input type="text" id="user-name" placeholder="請輸入您的姓名" required />
                 </div>
+                 <div class="form-group">
+                    <label>Email * (公司email)</label>
+                    <input type="email" id="user-email" placeholder="example@mitac.com.tw" required />
+                </div>
                 <p id="user-error" style="color: #ff6b6b; font-size: 0.9rem; margin-top: 1rem; display: none;">請填寫所有欄位</p>
-                <button class="btn full-width" id="btn-user-submit" style="margin-top: 1.5rem;">開始學習</button>
+                <button class="btn full-width" id="btn-user-submit" style="margin-top: 1.5rem;">開始學習 / 註冊</button>
                 <div style="text-align: center; margin-top: 15px;">
                     <a href="#" id="admin-login-link" style="font-size: 0.85rem; color: #aaa; text-decoration: none;">管理員後台</a>
                 </div>
@@ -193,28 +217,92 @@ function showUserDialog() {
         const submitBtn = overlay.querySelector('#btn-user-submit');
         const userIdInput = overlay.querySelector('#user-id');
         const userNameInput = overlay.querySelector('#user-name');
+        const userEmailInput = overlay.querySelector('#user-email');
         const errorMsg = overlay.querySelector('#user-error');
 
-        const submit = () => {
-            const userId = userIdInput.value.trim();
+        const submit = async () => {
+            const rawId = userIdInput.value.trim();
+            const rawEmail = userEmailInput.value.trim();
             const userName = userNameInput.value.trim();
 
-            if (!userId || !userName) {
+            if (!rawId || !userName || !rawEmail) {
+                errorMsg.textContent = '請填寫所有欄位';
                 errorMsg.style.display = 'block';
                 return;
             }
 
-            const user = { userId, userName };
+            // Normalization
+            const userId = rawId.toUpperCase();
+            const email = rawEmail.toLowerCase();
+
+            // Simple Email Regex
+            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+            if (!emailRegex.test(email)) {
+                errorMsg.textContent = '請輸入有效的 Email 格式';
+                errorMsg.style.display = 'block';
+                return;
+            }
+
+            submitBtn.disabled = true;
+            submitBtn.textContent = '驗證中...';
+
+            try {
+                // Check if user exists in Firestore
+                const userRef = doc(db, "users", userId);
+                const userSnap = await getDoc(userRef);
+
+                if (userSnap.exists()) {
+                    // User exists, check email
+                    const userData = userSnap.data();
+                    if (userData.email && userData.email.toLowerCase() === email) {
+                        // Login Success
+                        // Using userName from DB if you prefer consistency, or update it? 
+                        // Let's use the DB name to be safe, or allow update? 
+                        // Request says "compare", usually implies strict check.
+                        finishLogin({ userId, userName: userData.userName, email });
+                    } else {
+                        // Mismatch
+                        errorMsg.textContent = '登入失敗：員工編號已存在，但 Email 不符。';
+                        errorMsg.style.display = 'block';
+                        submitBtn.disabled = false;
+                        submitBtn.textContent = '開始學習 / 註冊';
+                    }
+                } else {
+                    // User does not exist -> Register
+                    const newUser = {
+                        userId,
+                        userName,
+                        email,
+                        createdAt: new Date().toISOString()
+                    };
+                    await setDoc(userRef, newUser);
+                    finishLogin(newUser);
+                }
+            } catch (e) {
+                console.error("Login Error", e);
+                errorMsg.textContent = '系統錯誤，請與管理員聯繫: ' + e.message;
+                errorMsg.style.display = 'block';
+                submitBtn.disabled = false;
+                submitBtn.textContent = '開始學習 / 註冊';
+            }
+        };
+
+        const finishLogin = (user) => {
             sessionStorage.setItem('hr_training_user', JSON.stringify(user));
             state.currentUser = user;
-
             document.body.removeChild(overlay);
             resolve(true);
+
+            // Re-render home to respect permissions with new user
+            if (window.location.hash === '' || window.location.hash === '#home') {
+                renderHome();
+            }
         };
 
         submitBtn.onclick = submit;
         userIdInput.addEventListener('keyup', (e) => { if (e.key === 'Enter') userNameInput.focus(); });
-        userNameInput.addEventListener('keyup', (e) => { if (e.key === 'Enter') submit(); });
+        userNameInput.addEventListener('keyup', (e) => { if (e.key === 'Enter') userEmailInput.focus(); });
+        userEmailInput.addEventListener('keyup', (e) => { if (e.key === 'Enter') submit(); });
 
         // Admin Link Handler
         const adminLink = overlay.querySelector('#admin-login-link');
@@ -465,7 +553,7 @@ function renderHome() {
     grid.style.gap = '2rem';
 
     // Availability Filter
-    const coursesToRender = state.courses.filter(c => isCourseAvailable(c));
+    const coursesToRender = state.courses.filter(c => canUserViewCourse(c, state.currentUser?.userId));
 
     coursesToRender.forEach(async (course) => {
         const card = document.createElement('div');
@@ -1275,27 +1363,36 @@ function renderAdmin() {
     // 2. Admin Workspace
     const courses = state.courses;
 
-    function renderList() {
+    // Common Header Helper
+    function renderAdminHeader() {
         container.innerHTML = `
-        <div class="full-width" style="background: var(--primary-color); color: white; padding: 2rem;">
-            <div class="container flex justify-between items-center">
-                <div>
-                    <h1>後台管理系統</h1>
-                    <p>課程內容、影片、測驗與配置管理</p>
+        <div class="full-width" style="background: var(--primary-color); color: white; padding: 1.5rem 0;">
+            <div class="container">
+                <div class="flex justify-between items-center mb-4">
+                    <h1 style="margin:0;">後台管理系統</h1>
+                    <button id="btn-logout" class="btn" style="background: rgba(255,255,255,0.1); border: 1px solid white;">登出</button>
                 </div>
-                <button id="btn-logout" class="btn" style="background: rgba(255,255,255,0.2); border: 1px solid white;">登出</button>
+                <div class="flex gap-2">
+                    <button id="tab-courses" class="btn" style="${state.adminViewMode === 'courses' ? 'background:white; color:var(--primary-color);' : 'background:transparent; color:white; border:1px solid white;'}">課程列表</button>
+                    <button id="tab-users" class="btn" style="${state.adminViewMode === 'users' ? 'background:white; color:var(--primary-color);' : 'background:transparent; color:white; border:1px solid white;'}">學員管理</button>
+                </div>
             </div>
-            </div>
+        </div>
         <div id="admin-workspace" class="container mt-4 mb-4"></div>
-    `;
+        `;
 
-        // Bind Logout
         container.querySelector('#btn-logout').onclick = () => {
-            state.adminLoggedIn = false;
-            location.hash = '#home'; // Redirect to home or reload
-            location.reload();
+            if (confirm('確定要登出嗎？')) {
+                state.adminLoggedIn = false;
+                window.location.reload();
+            }
         };
+        container.querySelector('#tab-courses').onclick = () => { state.adminViewMode = 'courses'; renderApp('#admin'); };
+        container.querySelector('#tab-users').onclick = () => { state.adminViewMode = 'users'; renderApp('#admin'); };
+    }
 
+    function renderCourseList() {
+        renderAdminHeader();
         const workspace = container.querySelector('#admin-workspace');
 
         const card = document.createElement('div');
@@ -1303,108 +1400,428 @@ function renderAdmin() {
         card.style.padding = '2rem';
         card.style.boxShadow = '0 4px 10px rgba(0,0,0,0.05)';
 
+        // Sort Toggle
+        const currentSort = state.adminSortBy || 'openDate';
+        const sortLabel = currentSort === 'openDate' ? '線上開放日期' :
+            currentSort === 'actualDate' ? '實際課程日期' : '上架狀態';
+
         const header = document.createElement('div');
         header.className = 'flex justify-between items-center mb-4';
         header.innerHTML = `
-        <h2>課程列表</h2>
+            <div class="flex items-center gap-4">
+                <h2 style="margin:0;">課程列表</h2>
+                <div style="font-size: 0.9rem;">
+                    排序依據: 
+                    <select id="sort-select" style="padding: 4px; border-radius: 4px; border: 1px solid #ddd;">
+                        <option value="openDate" ${currentSort === 'openDate' ? 'selected' : ''}>線上開放日期</option>
+                        <option value="actualDate" ${currentSort === 'actualDate' ? 'selected' : ''}>實際課程日期</option>
+                        <option value="status" ${currentSort === 'status' ? 'selected' : ''}>上架狀態</option>
+                    </select>
+                </div>
+            </div>
             <div class="flex gap-2">
+                 <button class="btn" id="btn-batch-delete" style="background-color: #dc3545; display: none;">🗑️ 刪除所選課程</button>
                 <button class="btn" id="btn-export-progress" style="background-color: #28a745;">📊 匯出課程紀錄</button>
                 <button class="btn" id="btn-add-course">+ 新增課程</button>
             </div>
-    `;
+        `;
         card.appendChild(header);
 
-        // Export Progress Button Handler
-        header.querySelector('#btn-export-progress').onclick = () => showExportDialog();
+        // Batch Delete Logic
+        header.querySelector('#btn-batch-delete').onclick = async () => {
+            const selected = Array.from(document.querySelectorAll('.course-checkbox:checked')).map(cb => cb.value);
+            if (selected.length === 0) return;
 
+            if (confirm(`確定要刪除選取的 ${selected.length} 堂課程嗎？\n此動作無法復原。`)) {
+                try {
+                    const promises = selected.map(id => deleteDoc(doc(db, "courses", id)));
+                    await Promise.all(promises);
+                    await fetchCourses();
+                    renderCourseList();
+                    alert('刪除成功！');
+                } catch (e) {
+                    console.error("Batch delete failed", e);
+                    alert("刪除失敗: " + e.message);
+                }
+            }
+        };
+
+        header.querySelector('#btn-export-progress').onclick = () => showExportDialog();
+        header.querySelector('#sort-select').onchange = (e) => {
+            state.adminSortBy = e.target.value;
+            renderCourseList();
+        };
+
+        // Course List Container
         const listDiv = document.createElement('div');
         listDiv.style.borderTop = '1px solid #eee';
+        listDiv.style.marginTop = '1rem';
 
-        courses.forEach(course => {
-            const row = document.createElement('div');
-            row.className = 'flex justify-between items-center';
-            row.style.padding = '1rem 0';
-            row.style.borderBottom = '1px solid #eee';
+        // Grouping Logic
+        const groups = {}; // { year: { month: [courses] } }
 
-            // Generate Full URL
-            const courseUrl = `${window.location.origin}${window.location.pathname}#course/${course.id}`;
-
-            row.innerHTML = `
-        <div class="flex items-center" style="max-width: 60%;">
-                    <div style="width: 20px; height: 20px; border-radius: 50%; background: ${course.color || '#ccc'}; margin-right: 1rem; flex-shrink:0;"></div>
-                    <div>
-                        <div style="font-weight: bold; font-size: 1.1rem; margin-bottom: 0.25rem;">${course.title}</div>
-                        <div style="font-size: 0.85rem; color: #666;">
-                            線上開放: ${course.startDate || '未設定'} ~ ${course.endDate || '未設定'}
-                            ${course.actualStartDate ? `<br>實際課程: ${course.actualStartDate} ~ ${course.actualEndDate || '未設定'}` : ''}
-                            ${course.courseHours ? `<br>課程時數: ${course.courseHours} 小時` : ''}<br>
-                            連結: <a href="${courseUrl}" target="_blank" style="color: var(--primary-color);">${courseUrl}</a>
-                        </div>
-                    </div>
-                </div>
-        <div class="flex gap-2">
-            <button class="btn copy-link-btn" data-url="${courseUrl}" style="background: #e9ecef; color: #333; font-size: 0.9rem;">複製連結</button>
-            <button class="btn edit-btn" style="font-size: 0.9rem;">編輯</button>
-            <button class="btn delete-btn" style="background-color: #dc3545; color: white; font-size: 0.9rem;">刪除</button>
-        </div>
-    `;
-
-            row.querySelector('.edit-btn').onclick = () => renderEditor(course);
-            row.querySelector('.copy-link-btn').onclick = (e) => {
-                const url = e.target.dataset.url;
-                navigator.clipboard.writeText(url).then(() => {
-                    const originalText = e.target.textContent;
-                    e.target.textContent = 'Copied!';
-                    setTimeout(() => e.target.textContent = originalText, 2000);
-                });
-            };
-
-            // Delete Functionality
-            row.querySelector('.delete-btn').onclick = async () => {
-                if (confirm(`確定要刪除課程「${course.title}」嗎？\n此動作無法復原。`)) {
-                    try {
-                        await deleteDoc(doc(db, "courses", course.id));
-                        await fetchCourses(); // Refresh
-                        renderAdmin(); // Re-render
-                    } catch (e) {
-                        console.error(e);
-                        alert('刪除失敗: ' + e.message);
-                    }
+        // Sort courses
+        const sortedCourses = [...courses].sort((a, b) => {
+            if (currentSort === 'status') {
+                // 1. Status: ON AIR (true) > Ended (false)
+                const statusA = isCourseAvailable(a);
+                const statusB = isCourseAvailable(b);
+                if (statusA !== statusB) {
+                    return statusA ? -1 : 1; // True comes first
                 }
-            };
+                // 2. Date: End Date Ascending (Old -> New)
+                const endA = a.endDate || '9999-99-99';
+                const endB = b.endDate || '9999-99-99';
+                return endA.localeCompare(endB);
+            } else {
+                // Default Date Sort Descending
+                const dateA = currentSort === 'openDate' ? (a.startDate || '0000-00-00') : (a.actualStartDate || '0000-00-00');
+                const dateB = currentSort === 'openDate' ? (b.startDate || '0000-00-00') : (b.actualStartDate || '0000-00-00');
+                return dateB.localeCompare(dateA);
+            }
+        });
 
-            listDiv.appendChild(row);
+        sortedCourses.forEach(c => {
+            if (currentSort === 'status') {
+                // Group by Status
+                const status = isCourseAvailable(c) ? 'ON AIR' : '已結束課程';
+                // Fake Year/Month structure for compatibility or simplify?
+                // Let's use Year = Status, Month = '列表'
+                if (!groups[status]) groups[status] = {};
+                if (!groups[status]['清單']) groups[status]['清單'] = [];
+                groups[status]['清單'].push(c);
+            } else {
+                // Date Grouping
+                const dateStr = currentSort === 'openDate' ? c.startDate : c.actualStartDate;
+                let year = '其他';
+                let month = '其他';
+
+                if (dateStr) {
+                    try {
+                        const d = new Date(dateStr);
+                        if (!isNaN(d.getTime())) {
+                            year = d.getFullYear().toString();
+                            month = (d.getMonth() + 1).toString().padStart(2, '0') + '月';
+                        }
+                    } catch (e) { }
+                }
+
+                if (!groups[year]) groups[year] = {};
+                if (!groups[year][month]) groups[year][month] = [];
+                groups[year][month].push(c);
+            }
+        });
+
+        // Render Groups
+        Object.keys(groups).sort((a, b) => b.localeCompare(a)).forEach(year => {
+            const yearBlock = document.createElement('details');
+            yearBlock.open = true;
+            yearBlock.style.marginBottom = '1rem';
+
+            const totalInYear = Object.values(groups[year]).reduce((acc, curr) => acc + curr.length, 0);
+
+            yearBlock.innerHTML = `
+                <summary style="font-weight: bold; font-size: 1.2rem; cursor: pointer; padding: 0.5rem 0; color: #333;">
+                    ${year} 年度 (${totalInYear})
+                </summary>
+                <div class="year-content" style="padding-left: 1rem;"></div>
+            `;
+
+            const yearContainer = yearBlock.querySelector('.year-content');
+
+            const months = groups[year];
+            Object.keys(months).sort((a, b) => b.localeCompare(a)).forEach(month => {
+                const monthBlock = document.createElement('details');
+                monthBlock.open = true;
+                monthBlock.style.marginBottom = '0.5rem';
+                monthBlock.innerHTML = `
+                    <summary style="font-weight: 500; font-size: 1rem; cursor: pointer; padding: 0.5rem 0; color: #666;">
+                        ${month}
+                    </summary>
+                    <div class="month-content" style="padding-left: 0.5rem;"></div>
+                `;
+
+                const monthContainer = monthBlock.querySelector('.month-content');
+
+                months[month].forEach(course => {
+                    const row = document.createElement('div');
+                    row.className = 'course-item flex justify-between items-center';
+                    row.style.padding = '1rem';
+                    row.style.borderBottom = '1px solid #eee';
+                    row.style.background = '#fff';
+
+                    const isOnAir = isCourseAvailable(course);
+                    const statusHtml = isOnAir
+                        ? `<span style="color: #d32f2f; font-weight: bold; margin-left: 0.5rem; font-size: 0.9rem;">● ON AIR</span>`
+                        : `<span style="color: #999; margin-left: 0.5rem; font-size: 0.9rem;">(已結束)</span>`;
+
+                    const courseUrl = `${window.location.origin}${window.location.pathname}#course/${course.id}`;
+
+                    row.innerHTML = `
+                        <div style="margin-right: 15px;">
+                            <input type="checkbox" class="course-checkbox" value="${course.id}" style="transform: scale(1.3); cursor: pointer;">
+                        </div>
+                       <div class="flex items-center" style="flex: 1;">
+                           <div style="width: 16px; height: 16px; border-radius: 50%; background: ${course.color || '#ccc'}; margin-right: 1rem; flex-shrink:0;"></div>
+                           <div>
+                               <div style="font-weight: bold; font-size: 1.05rem; margin-bottom: 0.2rem;">
+                                   ${course.title} ${statusHtml}
+                               </div>
+                               <div style="font-size: 0.85rem; color: #666;">
+                                   開放: ${course.startDate || '-'} ~ ${course.endDate || '-'}${course.actualStartDate ? ` | 實際: ${course.actualStartDate} ~ ${course.actualEndDate || '-'}` : ''}
+                               </div>
+                           </div>
+                       </div>
+                       <div class="flex gap-2">
+                            <button class="btn copy-link-btn" data-url="${courseUrl}" style="background: #e9ecef; color: #333; font-size: 0.8rem; padding: 4px 8px;">複製連結</button>
+                            <button class="btn edit-btn" style="font-size: 0.8rem; padding: 4px 8px;">編輯</button>
+                            <button class="btn delete-btn" style="background-color: #dc3545; color: white; font-size: 0.8rem; padding: 4px 8px;">刪除</button>
+                        </div>
+                    `;
+
+                    // Checkbox handler
+                    row.querySelector('.course-checkbox').onchange = () => {
+                        const anyChecked = document.querySelectorAll('.course-checkbox:checked').length > 0;
+                        const btn = document.getElementById('btn-batch-delete');
+                        if (btn) btn.style.display = anyChecked ? 'block' : 'none';
+                    };
+
+
+                    row.querySelector('.edit-btn').onclick = () => renderEditor(course);
+                    row.querySelector('.delete-btn').onclick = async () => {
+                        if (confirm(`確定要刪除課程「${course.title}」嗎？\n此動作無法復原。`)) {
+                            await deleteDoc(doc(db, "courses", course.id));
+                            await fetchCourses();
+                            renderCourseList();
+                        }
+                    };
+                    row.querySelector('.copy-link-btn').onclick = (e) => {
+                        navigator.clipboard.writeText(e.target.dataset.url).then(() => {
+                            const original = e.target.textContent;
+                            e.target.textContent = 'Copied!';
+                            setTimeout(() => e.target.textContent = original, 2000);
+                        });
+                    };
+
+                    monthContainer.appendChild(row);
+                });
+
+                yearContainer.appendChild(monthBlock);
+            });
+            listDiv.appendChild(yearBlock);
         });
 
         card.appendChild(listDiv);
         workspace.appendChild(card);
 
-        // Add Course (Sync to Firebase)
-        card.querySelector('#btn-add-course').onclick = async () => {
+        // Add Course
+        header.querySelector('#btn-add-course').onclick = () => {
             const today = new Date().toISOString().split('T')[0];
             const nextYear = new Date();
             nextYear.setFullYear(nextYear.getFullYear() + 1);
 
-            const newCourseData = {
+            // Open template directly
+            renderEditor({
                 title: '新課程',
                 color: '#0ABAB5',
                 startDate: today,
                 endDate: nextYear.toISOString().split('T')[0],
-                actualStartDate: null,
-                actualEndDate: null,
-                courseHours: null,
                 parts: []
-            };
+            });
+        };
+    }
+
+    async function renderUserManagement() {
+        renderAdminHeader();
+        const workspace = container.querySelector('#admin-workspace');
+
+        workspace.innerHTML = '<p style="text-align:center; padding:2rem;">正在讀取學員資料...</p>';
+
+        try {
+            const [allProgress, usersSnap] = await Promise.all([
+                getAllProgress(),
+                getDocs(collection(db, "users"))
+            ]);
+
+            const usersMap = {};
+
+            // 1. Load registered users
+            usersSnap.forEach(docSnap => {
+                const data = docSnap.data();
+                usersMap[docSnap.id] = {
+                    userId: docSnap.id, // ID is doc ID
+                    userName: data.userName || '',
+                    email: data.email || '',
+                    courses: [],
+                    lastActive: data.createdAt || null // Fallback
+                };
+            });
+
+            // 2. Merge Progress Data
+            allProgress.forEach(p => {
+                if (!usersMap[p.userId]) {
+                    // User has progress but not in 'users' collection (legacy or error)
+                    usersMap[p.userId] = {
+                        userId: p.userId,
+                        userName: p.userName,
+                        email: '-', // No email known
+                        courses: [],
+                        lastActive: null
+                    };
+                }
+
+                usersMap[p.userId].courses.push(p);
+
+                // Update timestamps
+                if (p.updatedAt) {
+                    if (!usersMap[p.userId].lastActive || p.updatedAt > usersMap[p.userId].lastActive) {
+                        usersMap[p.userId].lastActive = p.updatedAt;
+                    }
+                }
+            });
+
+            const userList = Object.values(usersMap).sort((a, b) => {
+                const timeA = a.lastActive || '';
+                const timeB = b.lastActive || '';
+                return timeB.localeCompare(timeA);
+            });
+
+            const card = document.createElement('div');
+            card.style.background = 'white';
+            card.style.padding = '2rem';
+            card.style.borderRadius = '8px';
+            card.style.boxShadow = '0 4px 10px rgba(0,0,0,0.05)';
+
+            card.innerHTML = `
+                <div class="flex justify-between items-center mb-4">
+                     <h2 style="margin:0;">學員管理 (${userList.length} 人)</h2>
+                </div>
+                <div style="overflow-x: auto;">
+                    <table style="width: 100%; border-collapse: collapse;">
+                        <thead>
+                            <tr style="background: #f8f9fa; border-bottom: 2px solid #eee;">
+                                <th style="padding: 1rem; text-align: left;">員工編號</th>
+                                <th style="padding: 1rem; text-align: left;">姓名</th>
+                                <th style="padding: 1rem; text-align: left;">Email</th>
+                                <th style="padding: 1rem; text-align: left;">參與課程數</th>
+                                <th style="padding: 1rem; text-align: left;">最後活動時間</th>
+                                <th style="padding: 1rem; text-align: left;">功能</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${userList.map(u => `
+                                <tr style="border-bottom: 1px solid #eee;">
+                                    <td style="padding: 1rem;">${u.userId}</td>
+                                    <td style="padding: 1rem;">${u.userName}</td>
+                                    <td style="padding: 1rem;">${u.email || '-'}</td>
+                                    <td style="padding: 1rem;">${u.courses.length}</td>
+                                    <td style="padding: 1rem; color: #666;">${u.lastActive ? new Date(u.lastActive).toLocaleString('zh-TW') : '-'}</td>
+                                    <td style="padding: 1rem;">
+                                        <button class="btn edit-user-btn" data-userid="${u.userId}" style="padding: 4px 12px; font-size: 0.85rem;">編輯</button>
+                                    </td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+
+            // Bind Edit Buttons
+            card.querySelectorAll('.edit-user-btn').forEach(btn => {
+                btn.onclick = () => {
+                    const userId = btn.dataset.userid;
+                    const user = usersMap[userId];
+                    renderUserEditor(user);
+                };
+            });
+
+            workspace.innerHTML = '';
+            workspace.appendChild(card);
+
+        } catch (e) {
+            console.error(e);
+            workspace.innerHTML = `<p style="color:red; text-align:center;">讀取失敗: ${e.message}</p>`;
+        }
+    }
+
+    function renderUserEditor(user) {
+        const workspace = container.querySelector('#admin-workspace');
+
+        const card = document.createElement('div');
+        card.style.background = 'white';
+        card.style.padding = '2rem';
+        card.style.borderRadius = '8px';
+        card.style.boxShadow = '0 4px 10px rgba(0,0,0,0.05)';
+
+        card.innerHTML = `
+            <div class="flex justify-between items-center mb-4">
+                <h2 style="margin:0;">編輯學員資料</h2>
+                <button class="btn" id="btn-back-users" style="background-color: #6c757d;">&larr; 返回列表</button>
+            </div>
+            
+            <div style="max-width: 600px; margin: 2rem auto; border: 1px solid #eee; padding: 2rem; border-radius: 8px;">
+                <div class="form-group margin-bottom: 1.5rem;">
+                    <label style="display:block; margin-bottom:0.5rem; font-weight:bold;">員工編號</label>
+                    <input type="text" value="${user.userId}" disabled style="width: 100%; padding: 10px; background: #f5f5f5; border: 1px solid #ddd; cursor: not-allowed;">
+                    <p style="font-size:0.85rem; color:#999; margin-top:0.25rem;">員工編號無法修改</p>
+                </div>
+                
+                <div class="form-group margin-bottom: 1.5rem;">
+                    <label style="display:block; margin-bottom:0.5rem; font-weight:bold;">姓名</label>
+                    <input type="text" id="edit-user-name" value="${user.userName}" style="width: 100%; padding: 10px; border: 1px solid #ddd;">
+                </div>
+                
+                <div class="form-group margin-bottom: 2rem;">
+                    <label style="display:block; margin-bottom:0.5rem; font-weight:bold;">Email</label>
+                    <input type="email" id="edit-user-email" value="${user.email || ''}" style="width: 100%; padding: 10px; border: 1px solid #ddd;">
+                </div>
+                
+                <div class="flex justify-end gap-2">
+                    <button class="btn" id="btn-cancel-user" style="background: #ccc; color: #333;">取消</button>
+                    <button class="btn" id="btn-save-user">儲存變更</button>
+                </div>
+            </div>
+        `;
+
+        const goBack = () => renderUserManagement();
+
+        card.querySelector('#btn-back-users').onclick = goBack;
+        card.querySelector('#btn-cancel-user').onclick = goBack;
+
+        card.querySelector('#btn-save-user').onclick = async () => {
+            const newName = card.querySelector('#edit-user-name').value.trim();
+            const newEmail = card.querySelector('#edit-user-email').value.trim();
+
+            if (!newName || !newEmail) {
+                alert('請填寫所有欄位');
+                return;
+            }
+            // Basic Email Regex
+            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+            if (!emailRegex.test(newEmail)) {
+                alert('請輸入有效的 Email 格式');
+                return;
+            }
 
             try {
-                await addDoc(collection(db, "courses"), newCourseData);
-                await fetchCourses(); // Refresh local state
-                renderAdmin(); // Refresh UI
+                // Update Firestore
+                await setDoc(doc(db, "users", user.userId), {
+                    userName: newName,
+                    email: newEmail,
+                    // Preserve createdAt? setDoc(..., {merge: true}) will preserve it.
+                }, { merge: true });
+
+                alert('儲存成功');
+                renderUserManagement();
+
             } catch (e) {
                 console.error(e);
-                alert('建立課程失敗');
+                alert('儲存失敗: ' + e.message);
             }
         };
+
+        workspace.innerHTML = '';
+        workspace.appendChild(card);
     }
 
     function renderEditor(course) {
@@ -1415,14 +1832,17 @@ function renderAdmin() {
         const workspace = container.querySelector('#admin-workspace');
         workspace.innerHTML = '';
 
+        // Determine if creating new
+        const isNew = !course.id;
+
         const editorCard = document.createElement('div');
         editorCard.style.background = 'white';
         editorCard.style.padding = '2rem';
         editorCard.style.boxShadow = '0 4px 10px rgba(0,0,0,0.05)';
 
         editorCard.innerHTML = `
-        <div class="flex justify-between items-center mb-4">
-                <h2>編輯課程</h2>
+            <div class="flex justify-between items-center mb-4">
+                <h2>${isNew ? '新增課程' : '編輯課程'}</h2>
                 <button class="btn" id="btn-back-list" style="background-color: #6c757d;">&larr; 返回列表</button>
             </div>
         <div class="course-editor" style="border: 1px solid var(--border-color); padding: 2rem; margin-top: 2rem;">
@@ -1439,11 +1859,35 @@ function renderAdmin() {
                 <label><strong>課程時數（小時）</strong></label>
                 <input type="number" id="edit-course-hours" value="${editingCourse.courseHours || ''}" min="0" step="0.5" placeholder="例如: 8" style="width: 200px; padding: 8px; border: 1px solid #ddd;" />
             </div>
-            <div class="form-group mb-4">
-                <label><strong>主題顏色</strong></label>
                 <div class="flex items-center">
                     <input type="color" id="edit-color" value="${editingCourse.color || '#0ABAB5'}" style="height: 40px; width: 60px; padding: 0; border: none; cursor: pointer;" />
                     <span style="margin-left: 10px; color: #666;">點擊選擇顏色</span>
+                </div>
+            </div>
+            
+            <div class="form-group mb-4" style="background: #f8f9fa; padding: 1rem; border-radius: 4px; border: 1px solid #eee;">
+                <div class="flex items-center mb-2">
+                    <input type="checkbox" id="user-permission-toggle" ${(editingCourse.allowedUserIds && editingCourse.allowedUserIds.length > 0) ? 'checked' : ''} style="width: 18px; height: 18px; margin-right: 10px; cursor: pointer;">
+                    <label for="user-permission-toggle" style="margin: 0; cursor: pointer; font-weight: bold;">僅限特定人員觀看</label>
+                </div>
+                
+                <div id="permission-input-container" style="display: ${(editingCourse.allowedUserIds && editingCourse.allowedUserIds.length > 0) ? 'block' : 'none'}; padding-left: 1.8rem;">
+                    
+                    <div style="margin-bottom: 0.5rem; display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+                        <button id="btn-import-permissions" class="btn" style="padding: 4px 12px; font-size: 0.85rem; background: #17a2b8; color: white; border: none; border-radius: 4px; display: flex; align-items: center; gap: 4px;">
+                            <span>📂</span> 匯入名單
+                        </button>
+                        <button id="btn-download-example" class="btn" style="padding: 4px 12px; font-size: 0.85rem; background: white; border: 1px solid #ddd; color: #666; border-radius: 4px; display: flex; align-items: center; gap: 4px;">
+                            <span>⬇️</span> 下載範例檔
+                        </button>
+                        <input type="file" id="permission-file-input" accept=".csv,.txt" style="display: none;">
+                        <span style="font-size: 0.8rem; color: #888;">支援 CSV, TXT 格式</span>
+                    </div>
+
+                    <div style="font-size: 0.85rem; color: #666; margin-bottom: 0.5rem;">
+                        請輸入允許觀看此課程的員工編號，以逗號分隔 (例如: EMP001, EMP002)
+                    </div>
+                    <textarea id="edit-permissions" rows="3" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;" placeholder="EMP001, EMP002, ...">${(editingCourse.allowedUserIds || []).join(', ')}</textarea>
                 </div>
             </div>
             <hr style="border:0; border-top:1px solid #eee; margin: 2rem 0;">
@@ -1458,7 +1902,7 @@ function renderAdmin() {
                     <button class="btn" id="btn-save">儲存變更</button>
                 </div>
         </div>
-    `;
+                    `;
 
         const unitContainer = editorCard.querySelector('#unit-list-container');
         const renderUnits = () => {
@@ -1471,15 +1915,15 @@ function renderAdmin() {
                 row.style.cssText = `background: var(--light - gray); padding: 1rem; margin - bottom: 1rem; border - left: 4px solid ${isQuiz ? '#ff6b6b' : (editingCourse.color || '#0ABAB5')} `;
 
                 row.innerHTML = `
-        <div class="flex justify-between items-center mb-2">
+                        < div class="flex justify-between items-center mb-2" >
                         <h5 style="margin:0;"><span style="background:${isQuiz ? '#ff6b6b' : '#666'}; color:white; padding:2px 6px; border-radius:4px; font-size:0.8rem; margin-right:8px;">${isQuiz ? '測驗' : '影片單元'}</span>${part.title}</h5>
                         <button class="btn btn-danger delete-unit-btn" data-idx="${idx}" style="padding: 4px 8px; font-size: 0.8rem;">刪除</button>
-                    </div>
-        <div class="grid gap-4" style="grid-template-columns: 1fr 1fr;">
-            <div><label style="font-size:0.9rem">顯示名稱</label><input type="text" class="unit-title-input" data-idx="${idx}" value="${part.title}" /></div>
-            <div><label style="font-size:0.9rem">${isQuiz ? 'Google 表單網址' : '影片網址'}</label><input type="text" class="unit-url-input" data-idx="${idx}" value="${part.url || ''}" /></div>
-        </div>
-    `;
+                    </div >
+                        <div class="grid gap-4" style="grid-template-columns: 1fr 1fr;">
+                            <div><label style="font-size:0.9rem">顯示名稱</label><input type="text" class="unit-title-input" data-idx="${idx}" value="${part.title}" /></div>
+                            <div><label style="font-size:0.9rem">${isQuiz ? 'Google 表單網址' : '影片網址'}</label><input type="text" class="unit-url-input" data-idx="${idx}" value="${part.url || ''}" /></div>
+                        </div>
+                    `;
                 unitContainer.appendChild(row);
             });
 
@@ -1502,6 +1946,82 @@ function renderAdmin() {
         editorCard.querySelector('#edit-actual-end').oninput = (e) => editingCourse.actualEndDate = e.target.value;
         editorCard.querySelector('#edit-course-hours').oninput = (e) => editingCourse.courseHours = parseFloat(e.target.value) || null;
         editorCard.querySelector('#edit-color').oninput = (e) => { editingCourse.color = e.target.value; renderUnits(); };
+        editorCard.querySelector('#user-permission-toggle').onchange = (e) => {
+            const container = editorCard.querySelector('#permission-input-container');
+            container.style.display = e.target.checked ? 'block' : 'none';
+        };
+
+        editorCard.querySelector('#edit-permissions').oninput = (e) => {
+            const val = e.target.value;
+            // Split by comma, trim, and remove empty strings
+            editingCourse.allowedUserIds = val.split(/[,，\n]/).map(s => s.trim()).filter(s => s);
+        };
+
+        // --- Batch Import Logic ---
+
+        // 1. Trigger File Input
+        editorCard.querySelector('#btn-import-permissions').onclick = () => {
+            editorCard.querySelector('#permission-file-input').click();
+        };
+
+        // 2. Handle File Selection
+        editorCard.querySelector('#permission-file-input').onchange = (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                const text = event.target.result;
+
+                // 1. Split by newlines first to handle header
+                let lines = text.split(/\r?\n/);
+
+                // 2. Filter out header if it contains specific keywords
+                if (lines.length > 0 && (lines[0].includes('員工編號') || lines[0].includes('Employee ID'))) {
+                    lines.shift(); // Remove first line
+                }
+
+                // 3. Join remaining lines and parse IDs
+                // Parse IDs: split by newlines or commas, remove quotes if CSV
+                const remainingText = lines.join('\n');
+                let ids = remainingText.split(/[\r\n,]+/)
+                    .map(id => id.trim().replace(/^['"]|['"]$/g, '')) // remove surrounding quotes
+                    .filter(id => id && !id.includes('員工編號') && !id.includes('Employee ID')); // Double check filter
+
+                if (ids.length > 0) {
+                    // Merge with existing or overwrite? Let's Merge and Deduplicate for better UX
+                    const currentIds = editingCourse.allowedUserIds || [];
+                    const newSet = new Set([...currentIds, ...ids]);
+                    editingCourse.allowedUserIds = Array.from(newSet);
+
+                    // Update UI
+                    editorCard.querySelector('#edit-permissions').value = editingCourse.allowedUserIds.join(', ');
+                    alert(`已匯入 ${ids.length} 筆資料`);
+                } else {
+                    alert('檔案中未找到有效資料');
+                }
+                // Reset input
+                e.target.value = '';
+            };
+            reader.readAsText(file);
+        };
+
+        // 3. Download Example
+        editorCard.querySelector('#btn-download-example').onclick = () => {
+            // Add BOM for Excel to open UTF-8 correctly
+            const bom = "\uFEFF";
+            const exampleContent = bom + "員工編號 (Employee ID)\nEMP001\nEMP002\nEMP003";
+            const blob = new Blob([exampleContent], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.setAttribute('href', url);
+            link.setAttribute('download', 'permission_import_example.csv');
+            link.style.visibility = 'hidden';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        };
+        // --------------------------
 
         // Add Units
         editorCard.querySelector('#btn-add-video').onclick = () => {
@@ -1514,8 +2034,10 @@ function renderAdmin() {
             renderUnits();
         };
 
+
         // Actions
-        const goBack = () => renderList();
+        // Fix: Use renderCourseList, as renderList is not defined in this scope
+        const goBack = () => renderCourseList();
         editorCard.querySelector('#btn-back-list').onclick = goBack;
         editorCard.querySelector('#btn-cancel').onclick = goBack;
 
@@ -1523,12 +2045,25 @@ function renderAdmin() {
         editorCard.querySelector('#btn-save').onclick = async () => {
             try {
                 if (confirm('確定要儲存變更嗎？')) {
-                    // Remove ID from object before saving (updateDoc takes ID separately)
-                    const { id, ...dataToSave } = editingCourse;
-                    await updateDoc(doc(db, "courses", course.id), dataToSave);
+                    // Check toggle state
+                    const isRestricted = editorCard.querySelector('#user-permission-toggle').checked;
+                    if (!isRestricted) {
+                        editingCourse.allowedUserIds = [];
+                    }
+
+                    if (isNew) {
+                        // CREATE
+                        await addDoc(collection(db, "courses"), editingCourse);
+                    } else {
+                        // UPDATE
+                        // Remove ID from object before saving (updateDoc takes ID separately)
+                        const { id, ...dataToSave } = editingCourse;
+                        await updateDoc(doc(db, "courses", course.id), dataToSave);
+                    }
+
                     await fetchCourses(); // Refresh local
                     alert('儲存成功！');
-                    goBack();
+                    renderCourseList();
                 }
             } catch (e) {
                 console.error(e);
@@ -1549,20 +2084,20 @@ function renderAdmin() {
 
         // Build course selection options
         let courseOptionsHTML = courses.map(course => `
-            <label style="display: block; margin-bottom: 0.75rem; cursor: pointer;">
-                <input type="checkbox" class="export-course" value="${course.id}" checked>
-                <span style="margin-left: 0.5rem; display: inline-flex; align-items: center;">
-                    <span style="display: inline-block; width: 12px; height: 12px; border-radius: 50%; background: ${course.color || '#0ABAB5'}; margin-right: 0.5rem;"></span>
-                    ${course.title}
-                </span>
-            </label>
-        `).join('');
+                        < label style = "display: block; margin-bottom: 0.75rem; cursor: pointer;" >
+                            <input type="checkbox" class="export-course" value="${course.id}" checked>
+                                <span style="margin-left: 0.5rem; display: inline-flex; align-items: center;">
+                                    <span style="display: inline-block; width: 12px; height: 12px; border-radius: 50%; background: ${course.color || '#0ABAB5'}; margin-right: 0.5rem;"></span>
+                                    ${course.title}
+                                </span>
+                            </label>
+                    `).join('');
 
         dialog.innerHTML = `
-            <div style="margin-bottom: 1.5rem;">
+                        < div style = "margin-bottom: 1.5rem;" >
                 <h2 style="margin: 0 0 0.5rem 0;">匯出課程紀錄</h2>
                 <p style="color: #666; font-size: 0.9rem;">請選擇要匯出的課程與欄位</p>
-            </div>
+            </div >
             
             <div style="border: 1px solid #ddd; padding: 1.5rem; border-radius: 4px; margin-bottom: 1.5rem; background: #f8f9fa;">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
@@ -1637,7 +2172,7 @@ function renderAdmin() {
                 <button id="btn-cancel-export" class="btn" style="background-color: #6c757d;">取消</button>
                 <button id="btn-confirm-export" class="btn" style="background-color: #28a745;">確定匯出</button>
             </div>
-        `;
+                    `;
 
         modal.appendChild(dialog);
         document.body.appendChild(modal);
@@ -1747,17 +2282,17 @@ function renderAdmin() {
         // Add unit headers if needed
         if (needUnitDetails) {
             for (let i = 0; i < maxUnits; i++) {
-                headers.push(`單元${i + 1}_完成狀態`);
+                headers.push(`單元${i + 1} _完成狀態`);
             }
         }
         if (needUnitProgress) {
             for (let i = 0; i < maxUnits; i++) {
-                headers.push(`單元${i + 1}_觀看進度(%)`);
+                headers.push(`單元${i + 1} _觀看進度(%)`);
             }
         }
         if (needViewCount) {
             for (let i = 0; i < maxUnits; i++) {
-                headers.push(`單元${i + 1}_觀看次數`);
+                headers.push(`單元${i + 1} _觀看次數`);
             }
         }
 
@@ -1856,6 +2391,10 @@ function renderAdmin() {
         alert('匯出成功！');
     }
 
-    setTimeout(renderList, 0);
+    if (state.adminViewMode === 'users') {
+        setTimeout(renderUserManagement, 0);
+    } else {
+        setTimeout(renderCourseList, 0);
+    }
     return container;
 }
