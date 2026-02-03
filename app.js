@@ -497,7 +497,7 @@ function renderHome() {
             <div class="course-title">${course.title}</div>
             <div class="course-meta">${course.parts ? course.parts.length : 0} 個單元</div>
             ${progressHtml}
-            <div class="course-meta" style="font-size:0.8rem; margin-top:0.5rem; color:#888;">開放時間: ${course.startDate || '未設定'} ~ ${course.endDate || '未設定'}</div>
+            <div class="course-meta" style="font-size:0.8rem; margin-top:0.5rem; color:#888;">\r\n                線上開放: ${course.startDate || '未設定'} ~ ${course.endDate || '未設定'}\r\n                ${course.actualStartDate ? `<br>實際課程: ${course.actualStartDate} ~ ${course.actualEndDate || ''}` : ''}\r\n                ${course.courseHours ? `<br>時數: ${course.courseHours} 小時` : ''}\r\n            </div>
             <a href="#course/${course.id}" class="btn" style="background-color: ${course.color || '#0ABAB5'}">進入課程</a>
         `;
         grid.appendChild(card);
@@ -534,6 +534,33 @@ async function renderCourseDetail(id) {
         userProgress = await loadProgress(state.currentUser.userId, id);
         if (userProgress && userProgress.units) {
             unitProgressData = userProgress.units;
+
+            // ✅ 修復:同步單元數量 - 如果課程新增了單元,自動補齊進度
+            const currentUnitCount = course.parts ? course.parts.length : 0;
+            const savedUnitCount = unitProgressData.length;
+
+            if (currentUnitCount > savedUnitCount) {
+                console.log(`[進度同步] 課程有 ${currentUnitCount} 個單元,但進度只有 ${savedUnitCount} 筆,自動補齊`);
+
+                // 補齊缺少的單元進度
+                for (let i = savedUnitCount; i < currentUnitCount; i++) {
+                    const part = course.parts[i];
+                    unitProgressData.push({
+                        unitIndex: i,
+                        unitTitle: part.title,
+                        type: part.type,
+                        lastPosition: 0,
+                        duration: 0,
+                        completed: false,
+                        quizCompleted: false,
+                        lastAccessTime: null,
+                        viewCount: 0
+                    });
+                }
+
+                // 立即儲存更新後的進度
+                await saveProgress(state.currentUser.userId, id, course.title, unitProgressData);
+            }
         } else {
             // 初始化進度
             unitProgressData = initializeUnitProgress(course);
@@ -784,7 +811,7 @@ async function renderCourseDetail(id) {
         };
 
         const renderContent = async () => {
-            // 清除之前的自動儲存（直接影片檔案）
+            // 清除之前的自動儲存(直接影片檔案)
             if (progressSaveInterval) {
                 clearInterval(progressSaveInterval);
                 progressSaveInterval = null;
@@ -796,19 +823,93 @@ async function renderCourseDetail(id) {
             currentUnitIndex = index;
             contentDisplay.innerHTML = '';
 
+            // ✅ 雙重保護:確保該索引的進度資料存在
+            if (!unitProgressData[index]) {
+                console.warn(`[防禦性修復] unitProgressData[${index}] 不存在,正在初始化...`);
+                unitProgressData[index] = {
+                    unitIndex: index,
+                    unitTitle: part.title,
+                    type: part.type,
+                    lastPosition: 0,
+                    duration: 0,
+                    completed: false,
+                    quizCompleted: false,
+                    lastAccessTime: null,
+                    viewCount: 0
+                };
+            }
+
             // 增加觀看次數
             if (!unitProgressData[index].viewCount) unitProgressData[index].viewCount = 0;
             unitProgressData[index].viewCount++;
 
             if (part.type === 'quiz') {
-                // Render Form Iframe
+                // Render Quiz Button (No iframe - direct link)
                 if (part.url) {
-                    contentDisplay.style.background = 'white';
+                    contentDisplay.style.background = 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)';
                     contentDisplay.innerHTML = `
-                        <div style="width: 100%; height: 100%;">
-                            <iframe src="${part.url}" width="100%" height="800px" frameborder="0" marginheight="0" marginwidth="0">載入中...</iframe>
-                            <div style="text-align: center; padding: 1rem; background: white;">
-                                <button class="btn" id="mark-quiz-complete" style="background-color: ${themeColor};">標記測驗已完成</button>
+                        <div style="
+                            width: 100%; 
+                            height: 100%; 
+                            display: flex; 
+                            flex-direction: column; 
+                            align-items: center; 
+                            justify-content: center; 
+                            padding: 3rem;
+                            text-align: center;
+                        ">
+                            <div style="
+                                background: white; 
+                                padding: 3rem 2rem; 
+                                border-radius: 16px; 
+                                box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+                                max-width: 500px;
+                            ">
+                                <div style="font-size: 4rem; margin-bottom: 1.5rem;">📝</div>
+                                <h2 style="color: #333; margin-bottom: 1rem;">課後測驗</h2>
+                                <p style="color: #666; margin-bottom: 2rem; line-height: 1.6;">
+                                    請點擊下方按鈕在新視窗開啟測驗<br>
+                                    完成測驗後請回到本頁面標記為已完成
+                                </p>
+                                
+                                <button 
+                                    class="btn" 
+                                    onclick="window.open('${part.url}', '_blank', 'width=1000,height=800')" 
+                                    style="
+                                        background-color: ${themeColor}; 
+                                        color: white;
+                                        border: none;
+                                        font-size: 1.1rem;
+                                        padding: 1rem 2.5rem;
+                                        margin-bottom: 1.5rem;
+                                        width: 100%;
+                                        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+                                        transition: transform 0.2s;
+                                    "
+                                    onmouseover="this.style.transform='translateY(-2px)'"
+                                    onmouseout="this.style.transform='translateY(0)'"
+                                >
+                                    🚀 開始測驗
+                                </button>
+                                
+                                <button 
+                                    class="btn" 
+                                    id="mark-quiz-complete" 
+                                    style="
+                                        background-color: #4CAF50; 
+                                        color: white;
+                                        border: none;
+                                        font-size: 1rem;
+                                        padding: 0.8rem 2rem;
+                                        width: 100%;
+                                    "
+                                >
+                                    ✓ 標記測驗已完成
+                                </button>
+                                
+                                <p style="color: #999; font-size: 0.85rem; margin-top: 1.5rem;">
+                                    💡 提示：測驗將在新視窗開啟
+                                </p>
                             </div>
                         </div>
                     `;
@@ -1206,9 +1307,15 @@ function renderAdmin() {
         header.className = 'flex justify-between items-center mb-4';
         header.innerHTML = `
         <h2>課程列表</h2>
-            <button class="btn" id="btn-add-course">+ 新增課程</button>
+            <div class="flex gap-2">
+                <button class="btn" id="btn-export-progress" style="background-color: #28a745;">📊 匯出課程紀錄</button>
+                <button class="btn" id="btn-add-course">+ 新增課程</button>
+            </div>
     `;
         card.appendChild(header);
+
+        // Export Progress Button Handler
+        header.querySelector('#btn-export-progress').onclick = () => showExportDialog();
 
         const listDiv = document.createElement('div');
         listDiv.style.borderTop = '1px solid #eee';
@@ -1228,7 +1335,9 @@ function renderAdmin() {
                     <div>
                         <div style="font-weight: bold; font-size: 1.1rem; margin-bottom: 0.25rem;">${course.title}</div>
                         <div style="font-size: 0.85rem; color: #666;">
-                            時間: ${course.startDate || '未設定'} ~ ${course.endDate || '未設定'}<br>
+                            線上開放: ${course.startDate || '未設定'} ~ ${course.endDate || '未設定'}
+                            ${course.actualStartDate ? `<br>實際課程: ${course.actualStartDate} ~ ${course.actualEndDate || '未設定'}` : ''}
+                            ${course.courseHours ? `<br>課程時數: ${course.courseHours} 小時` : ''}<br>
                             連結: <a href="${courseUrl}" target="_blank" style="color: var(--primary-color);">${courseUrl}</a>
                         </div>
                     </div>
@@ -1281,6 +1390,9 @@ function renderAdmin() {
                 color: '#0ABAB5',
                 startDate: today,
                 endDate: nextYear.toISOString().split('T')[0],
+                actualStartDate: null,
+                actualEndDate: null,
+                courseHours: null,
                 parts: []
             };
 
@@ -1316,8 +1428,16 @@ function renderAdmin() {
         <div class="course-editor" style="border: 1px solid var(--border-color); padding: 2rem; margin-top: 2rem;">
             <div class="form-group mb-4"><label><strong>課程標題</strong></label><input type="text" id="edit-title" value="${editingCourse.title}" /></div>
             <div class="grid gap-4 mb-4" style="grid-template-columns: 1fr 1fr;">
-                <div><label><strong>開始日期</strong></label><input type="date" id="edit-start" value="${editingCourse.startDate || ''}" style="width:100%; padding: 8px; border: 1px solid #ddd;" /></div>
-                <div><label><strong>結束日期</strong></label><input type="date" id="edit-end" value="${editingCourse.endDate || ''}" style="width:100%; padding: 8px; border: 1px solid #ddd;" /></div>
+                <div><label><strong>線上開放日期</strong></label><input type="date" id="edit-start" value="${editingCourse.startDate || ''}" style="width:100%; padding: 8px; border: 1px solid #ddd;" /></div>
+                <div><label><strong>線上結束日期</strong></label><input type="date" id="edit-end" value="${editingCourse.endDate || ''}" style="width:100%; padding: 8px; border: 1px solid #ddd;" /></div>
+            </div>
+            <div class="grid gap-4 mb-4" style="grid-template-columns: 1fr 1fr;">
+                <div><label><strong>實際課程開始日期</strong></label><input type="date" id="edit-actual-start" value="${editingCourse.actualStartDate || ''}" style="width:100%; padding: 8px; border: 1px solid #ddd;" /></div>
+                <div><label><strong>實際課程結束日期</strong></label><input type="date" id="edit-actual-end" value="${editingCourse.actualEndDate || ''}" style="width:100%; padding: 8px; border: 1px solid #ddd;" /></div>
+            </div>
+            <div class="form-group mb-4">
+                <label><strong>課程時數（小時）</strong></label>
+                <input type="number" id="edit-course-hours" value="${editingCourse.courseHours || ''}" min="0" step="0.5" placeholder="例如: 8" style="width: 200px; padding: 8px; border: 1px solid #ddd;" />
             </div>
             <div class="form-group mb-4">
                 <label><strong>主題顏色</strong></label>
@@ -1378,6 +1498,9 @@ function renderAdmin() {
         editorCard.querySelector('#edit-title').oninput = (e) => editingCourse.title = e.target.value;
         editorCard.querySelector('#edit-start').oninput = (e) => editingCourse.startDate = e.target.value;
         editorCard.querySelector('#edit-end').oninput = (e) => editingCourse.endDate = e.target.value;
+        editorCard.querySelector('#edit-actual-start').oninput = (e) => editingCourse.actualStartDate = e.target.value;
+        editorCard.querySelector('#edit-actual-end').oninput = (e) => editingCourse.actualEndDate = e.target.value;
+        editorCard.querySelector('#edit-course-hours').oninput = (e) => editingCourse.courseHours = parseFloat(e.target.value) || null;
         editorCard.querySelector('#edit-color').oninput = (e) => { editingCourse.color = e.target.value; renderUnits(); };
 
         // Add Units
@@ -1414,6 +1537,323 @@ function renderAdmin() {
         };
 
         workspace.appendChild(editorCard);
+    }
+
+    // Export Dialog
+    function showExportDialog() {
+        const modal = document.createElement('div');
+        modal.style.cssText = 'position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); display: flex; justify-content: center; align-items: center; z-index: 9999;';
+
+        const dialog = document.createElement('div');
+        dialog.style.cssText = 'background: white; padding: 2rem; border-radius: 8px; max-width: 600px; width: 90%; max-height: 80vh; overflow-y: auto;';
+
+        // Build course selection options
+        let courseOptionsHTML = courses.map(course => `
+            <label style="display: block; margin-bottom: 0.75rem; cursor: pointer;">
+                <input type="checkbox" class="export-course" value="${course.id}" checked>
+                <span style="margin-left: 0.5rem; display: inline-flex; align-items: center;">
+                    <span style="display: inline-block; width: 12px; height: 12px; border-radius: 50%; background: ${course.color || '#0ABAB5'}; margin-right: 0.5rem;"></span>
+                    ${course.title}
+                </span>
+            </label>
+        `).join('');
+
+        dialog.innerHTML = `
+            <div style="margin-bottom: 1.5rem;">
+                <h2 style="margin: 0 0 0.5rem 0;">匯出課程紀錄</h2>
+                <p style="color: #666; font-size: 0.9rem;">請選擇要匯出的課程與欄位</p>
+            </div>
+            
+            <div style="border: 1px solid #ddd; padding: 1.5rem; border-radius: 4px; margin-bottom: 1.5rem; background: #f8f9fa;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                    <h4 style="margin: 0;">選擇課程</h4>
+                    <div style="display: flex; gap: 0.5rem;">
+                        <button id="btn-select-all-courses" class="btn" style="padding: 4px 12px; font-size: 0.85rem; background: transparent; border: 1px solid #0ABAB5; color: #0ABAB5;">全選</button>
+                        <button id="btn-deselect-all-courses" class="btn" style="padding: 4px 12px; font-size: 0.85rem; background: transparent; border: 1px solid #6c757d; color: #6c757d;">取消全選</button>
+                    </div>
+                </div>
+                <div style="max-height: 200px; overflow-y: auto;">
+                    ${courseOptionsHTML}
+                </div>
+            </div>
+            
+            <div style="border: 1px solid #ddd; padding: 1.5rem; border-radius: 4px; margin-bottom: 1.5rem;">
+                <h4 style="margin: 0 0 1rem 0;">基本資訊</h4>
+                <label style="display: block; margin-bottom: 0.75rem; cursor: pointer;">
+                    <input type="checkbox" class="export-field" value="userId" checked>
+                    <span style="margin-left: 0.5rem;">員工編號</span>
+                </label>
+                <label style="display: block; margin-bottom: 0.75rem; cursor: pointer;">
+                    <input type="checkbox" class="export-field" value="userName" checked>
+                    <span style="margin-left: 0.5rem;">姓名</span>
+                </label>
+                <label style="display: block; margin-bottom: 0.75rem; cursor: pointer;">
+                    <input type="checkbox" class="export-field" value="courseName" checked>
+                    <span style="margin-left: 0.5rem;">課程名稱</span>
+                </label>
+            </div>
+            
+            <div style="border: 1px solid #ddd; padding: 1.5rem; border-radius: 4px; margin-bottom: 1.5rem;">
+                <h4 style="margin: 0 0 1rem 0;">課程進度</h4>
+                <label style="display: block; margin-bottom: 0.75rem; cursor: pointer;">
+                    <input type="checkbox" class="export-field" value="status" checked>
+                    <span style="margin-left: 0.5rem;">學習狀態（已完成/學習中/未開始）</span>
+                </label>
+                <label style="display: block; margin-bottom: 0.75rem; cursor: pointer;">
+                    <input type="checkbox" class="export-field" value="completionRate" checked>
+                    <span style="margin-left: 0.5rem;">完成度（%）</span>
+                </label>
+                <label style="display: block; margin-bottom: 0.75rem; cursor: pointer;">
+                    <input type="checkbox" class="export-field" value="completedUnits" checked>
+                    <span style="margin-left: 0.5rem;">已完成單元數</span>
+                </label>
+                <label style="display: block; margin-bottom: 0.75rem; cursor: pointer;">
+                    <input type="checkbox" class="export-field" value="totalUnits" checked>
+                    <span style="margin-left: 0.5rem;">總單元數</span>
+                </label>
+                <label style="display: block; margin-bottom: 0.75rem; cursor: pointer;">
+                    <input type="checkbox" class="export-field" value="updatedAt">
+                    <span style="margin-left: 0.5rem;">最後學習時間</span>
+                </label>
+            </div>
+            
+            <div style="border: 1px solid #ddd; padding: 1.5rem; border-radius: 4px; margin-bottom: 1.5rem;">
+                <h4 style="margin: 0 0 1rem 0;">單元詳細資訊</h4>
+                <label style="display: block; margin-bottom: 0.75rem; cursor: pointer;">
+                    <input type="checkbox" class="export-field" value="unitDetails">
+                    <span style="margin-left: 0.5rem;">各單元完成狀態（每個單元一欄）</span>
+                </label>
+                <label style="display: block; margin-bottom: 0.75rem; cursor: pointer;">
+                    <input type="checkbox" class="export-field" value="unitProgress">
+                    <span style="margin-left: 0.5rem;">各單元觀看進度（%）</span>
+                </label>
+                <label style="display: block; margin-bottom: 0.75rem; cursor: pointer;">
+                    <input type="checkbox" class="export-field" value="viewCount">
+                    <span style="margin-left: 0.5rem;">各單元觀看次數</span>
+                </label>
+            </div>
+            
+            <div style="display: flex; gap: 1rem; justify-content: flex-end;">
+                <button id="btn-cancel-export" class="btn" style="background-color: #6c757d;">取消</button>
+                <button id="btn-confirm-export" class="btn" style="background-color: #28a745;">確定匯出</button>
+            </div>
+        `;
+
+        modal.appendChild(dialog);
+        document.body.appendChild(modal);
+
+        // Close handlers
+        const closeModal = () => document.body.removeChild(modal);
+        modal.onclick = (e) => { if (e.target === modal) closeModal(); };
+        dialog.querySelector('#btn-cancel-export').onclick = closeModal;
+
+        // Course selection handlers
+        dialog.querySelector('#btn-select-all-courses').onclick = () => {
+            dialog.querySelectorAll('.export-course').forEach(cb => cb.checked = true);
+        };
+        dialog.querySelector('#btn-deselect-all-courses').onclick = () => {
+            dialog.querySelectorAll('.export-course').forEach(cb => cb.checked = false);
+        };
+
+        // Export handler
+        dialog.querySelector('#btn-confirm-export').onclick = async () => {
+            const selectedCourses = [];
+            dialog.querySelectorAll('.export-course:checked').forEach(cb => {
+                selectedCourses.push(cb.value);
+            });
+
+            if (selectedCourses.length === 0) {
+                alert('請至少選擇一個課程');
+                return;
+            }
+
+            const selectedFields = [];
+            dialog.querySelectorAll('.export-field:checked').forEach(cb => {
+                selectedFields.push(cb.value);
+            });
+
+            if (selectedFields.length === 0) {
+                alert('請至少選擇一個欄位');
+                return;
+            }
+
+            // Show loading
+            const btn = dialog.querySelector('#btn-confirm-export');
+            btn.textContent = '匯出中...';
+            btn.disabled = true;
+
+            try {
+                await exportProgressToCSV(selectedFields, selectedCourses);
+                closeModal();
+            } catch (e) {
+                alert('匯出失敗: ' + e.message);
+                btn.textContent = '確定匯出';
+                btn.disabled = false;
+            }
+        };
+    }
+
+    // Export to CSV function
+    async function exportProgressToCSV(selectedFields, selectedCourseIds) {
+        // Get all progress data
+        const allProgress = await getAllProgress();
+
+        // Filter by selected courses
+        const filteredProgress = allProgress.filter(progress =>
+            selectedCourseIds.includes(progress.courseId)
+        );
+
+        if (filteredProgress.length === 0) {
+            alert('所選課程目前沒有任何學習紀錄可以匯出');
+            return;
+        }
+
+        // Build CSV headers
+        const headers = [];
+        const fieldMap = {
+            'userId': '員工編號',
+            'userName': '姓名',
+            'courseName': '課程名稱',
+            'status': '學習狀態',
+            'completionRate': '完成度(%)',
+            'completedUnits': '已完成單元數',
+            'totalUnits': '總單元數',
+            'updatedAt': '最後學習時間'
+        };
+
+        selectedFields.forEach(field => {
+            if (fieldMap[field]) {
+                headers.push(fieldMap[field]);
+            }
+        });
+
+        // Prepare rows
+        const rows = [];
+
+        // Check if we need unit details
+        const needUnitDetails = selectedFields.includes('unitDetails');
+        const needUnitProgress = selectedFields.includes('unitProgress');
+        const needViewCount = selectedFields.includes('viewCount');
+
+        // Find max unit count for header alignment
+        let maxUnits = 0;
+        if (needUnitDetails || needUnitProgress || needViewCount) {
+            filteredProgress.forEach(progress => {
+                const unitCount = progress.units?.length || 0;
+                if (unitCount > maxUnits) maxUnits = unitCount;
+            });
+        }
+
+        // Add unit headers if needed
+        if (needUnitDetails) {
+            for (let i = 0; i < maxUnits; i++) {
+                headers.push(`單元${i + 1}_完成狀態`);
+            }
+        }
+        if (needUnitProgress) {
+            for (let i = 0; i < maxUnits; i++) {
+                headers.push(`單元${i + 1}_觀看進度(%)`);
+            }
+        }
+        if (needViewCount) {
+            for (let i = 0; i < maxUnits; i++) {
+                headers.push(`單元${i + 1}_觀看次數`);
+            }
+        }
+
+        rows.push(headers);
+
+        // Build data rows
+        filteredProgress.forEach(progress => {
+            const row = [];
+
+            selectedFields.forEach(field => {
+                if (field === 'userId') {
+                    row.push(progress.userId || '');
+                } else if (field === 'userName') {
+                    row.push(progress.userName || '');
+                } else if (field === 'courseName') {
+                    row.push(progress.courseName || '');
+                } else if (field === 'status') {
+                    const statusText = progress.status === 'completed' ? '已完成' :
+                        progress.status === 'in-progress' ? '學習中' : '未開始';
+                    row.push(statusText);
+                } else if (field === 'completionRate') {
+                    row.push(progress.completionRate || 0);
+                } else if (field === 'completedUnits') {
+                    const completed = progress.units?.filter(u => u.completed || u.quizCompleted).length || 0;
+                    row.push(completed);
+                } else if (field === 'totalUnits') {
+                    row.push(progress.units?.length || 0);
+                } else if (field === 'updatedAt') {
+                    const date = progress.updatedAt ? new Date(progress.updatedAt).toLocaleString('zh-TW') : '';
+                    row.push(date);
+                }
+            });
+
+            // Add unit details
+            if (needUnitDetails) {
+                for (let i = 0; i < maxUnits; i++) {
+                    const unit = progress.units?.[i];
+                    if (unit) {
+                        const isCompleted = unit.completed || unit.quizCompleted;
+                        row.push(isCompleted ? '已完成' : '未完成');
+                    } else {
+                        row.push('');
+                    }
+                }
+            }
+
+            if (needUnitProgress) {
+                for (let i = 0; i < maxUnits; i++) {
+                    const unit = progress.units?.[i];
+                    if (unit && unit.duration > 0) {
+                        const percent = Math.round((unit.lastPosition / unit.duration) * 100);
+                        row.push(percent);
+                    } else {
+                        row.push('');
+                    }
+                }
+            }
+
+            if (needViewCount) {
+                for (let i = 0; i < maxUnits; i++) {
+                    const unit = progress.units?.[i];
+                    row.push(unit?.viewCount || 0);
+                }
+            }
+
+            rows.push(row);
+        });
+
+        // Convert to CSV
+        const csvContent = rows.map(row => {
+            return row.map(cell => {
+                // Escape quotes and wrap in quotes if contains comma or newline
+                const cellStr = String(cell);
+                if (cellStr.includes(',') || cellStr.includes('\n') || cellStr.includes('"')) {
+                    return '"' + cellStr.replace(/"/g, '""') + '"';
+                }
+                return cellStr;
+            }).join(',');
+        }).join('\n');
+
+        // Add BOM for Excel UTF-8 support
+        const BOM = '\uFEFF';
+        const blob = new Blob([BOM + csvContent], { type: 'text/csv;charset=utf-8;' });
+
+        // Download
+        const link = document.createElement('a');
+        const url = URL.createObjectURL(blob);
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+        link.setAttribute('href', url);
+        link.setAttribute('download', `課程紀錄_${timestamp}.csv`);
+        link.style.visibility = 'hidden';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+
+        alert('匯出成功！');
     }
 
     setTimeout(renderList, 0);
