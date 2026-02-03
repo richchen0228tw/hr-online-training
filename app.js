@@ -1020,7 +1020,31 @@ async function renderCourseDetail(id) {
                                 
                                 <button 
                                     class="btn" 
-                                    onclick="window.open('${part.url}', '_blank', 'width=1000,height=800')" 
+                                    onclick="
+                                        const now = Date.now();
+                                        window.open('${part.url}', '_blank', 'width=1000,height=800');
+                                        
+                                        // 啟動倒數計時與啟用按鈕機制
+                                        const markBtn = document.getElementById('mark-quiz-complete');
+                                        if (markBtn && markBtn.disabled && !markBtn.classList.contains('completed')) {
+                                            let timeLeft = 10; // 10秒強制倒數
+                                            markBtn.style.opacity = '1';
+                                            markBtn.style.backgroundColor = '#999'; // 倒數中顏色
+                                            markBtn.textContent = '⏳ 請稍候 ' + timeLeft + ' 秒...';
+                                            
+                                            const timer = setInterval(() => {
+                                                timeLeft--;
+                                                if (timeLeft <= 0) {
+                                                    clearInterval(timer);
+                                                    markBtn.disabled = false;
+                                                    markBtn.style.backgroundColor = '#4CAF50';
+                                                    markBtn.textContent = '✓ 標記測驗已完成';
+                                                } else {
+                                                    markBtn.textContent = '⏳ 請稍候 ' + timeLeft + ' 秒...';
+                                                }
+                                            }, 1000);
+                                        }
+                                    " 
                                     style="
                                         background-color: ${themeColor}; 
                                         color: white;
@@ -1041,20 +1065,24 @@ async function renderCourseDetail(id) {
                                 <button 
                                     class="btn" 
                                     id="mark-quiz-complete" 
+                                    disabled
                                     style="
-                                        background-color: #4CAF50; 
+                                        background-color: #ccc; 
                                         color: white;
                                         border: none;
                                         font-size: 1rem;
                                         padding: 0.8rem 2rem;
                                         width: 100%;
+                                        cursor: not-allowed;
+                                        transition: background-color 0.3s;
                                     "
+                                    title="請先點擊上方按鈕開啟測驗"
                                 >
-                                    ✓ 標記測驗已完成
+                                    ⚠️ 請先開啟測驗
                                 </button>
                                 
                                 <p style="color: #999; font-size: 0.85rem; margin-top: 1.5rem;">
-                                    💡 提示：測驗將在新視窗開啟
+                                    💡 提示：點擊「開始測驗」後，需等待 10 秒才能標記完成
                                 </p>
                             </div>
                         </div>
@@ -1065,12 +1093,38 @@ async function renderCourseDetail(id) {
                         const markBtn = contentDisplay.querySelector('#mark-quiz-complete');
                         if (markBtn) {
                             markBtn.onclick = async () => {
+                                // 防呆邏輯：驗證碼檢查
+                                const requiredCode = part.verificationCode ? String(part.verificationCode).trim() : '';
+
+                                if (requiredCode) {
+                                    const userCode = prompt('此測驗需要輸入驗證碼才能完成。\n請輸入驗證碼（通常顯示於測驗表單最後）：');
+                                    if (!userCode || userCode.trim().toLowerCase() !== requiredCode.toLowerCase()) {
+                                        alert('❌ 驗證碼錯誤，請重新確認！');
+                                        return;
+                                    }
+                                } else {
+                                    // 基本防呆：二次確認
+                                    // 檢查按鈕狀態是否允許
+                                    if (markBtn.innerText.includes('請稍候')) {
+                                        alert('⏳ 請完整參與測驗後再標記完成！');
+                                        return;
+                                    }
+
+                                    if (!confirm('您確認已經填寫並送出測驗表單了嗎？')) {
+                                        return;
+                                    }
+                                }
+
+
                                 await markUnitCompleted(state.currentUser.userId, id, course.title, index, unitProgressData, true);
                                 btn.innerHTML = btn.textContent.replace(' ✓', '') + ' <span style="color: #4CAF50;">✓</span>';
                                 updateCourseProgress();
                                 markBtn.textContent = '✓ 已完成';
+                                markBtn.classList.add('completed');
                                 markBtn.disabled = true;
                                 markBtn.style.opacity = '0.7';
+                                markBtn.style.backgroundColor = '#4CAF50';
+                                markBtn.style.cursor = 'default';
                             };
                         }
                     }, 100);
@@ -1274,31 +1328,58 @@ function createErrorView(msg, showHomeBtn = true) {
 }
 
 // 學習進度查詢頁面
-async function renderProgress() {
+async function renderProgress(targetUserId = null) {
     const div = document.createElement('div');
 
-    if (!state.currentUser) {
+    const isViewAsAdmin = !!targetUserId && state.adminLoggedIn;
+    const userId = targetUserId || (state.currentUser ? state.currentUser.userId : null);
+
+    if (!userId) {
         div.innerHTML = '<h2 style="text-align:center; color:#666;">請先登入以查看學習紀錄</h2>';
         return div;
+    }
+
+    let userDisplayName = userId;
+    // 如果是 Admin 查看他人，嘗試取得該 User Info
+    if (isViewAsAdmin) {
+        try {
+            const userSnap = await getDoc(doc(db, "users", userId));
+            if (userSnap.exists()) {
+                userDisplayName = `${userSnap.data().userName} (${userId})`;
+            }
+        } catch (e) { console.error(e); }
+    } else if (state.currentUser) {
+        userDisplayName = `${state.currentUser.userName} (${state.currentUser.userId})`;
     }
 
     div.innerHTML = `
     <div style="max-width: 1000px; margin: 0 auto;">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
-            <h1 style="margin: 0;">我的學習紀錄</h1>
-            <a href="#home" class="btn" style="background-color: #6c757d;">&larr; 回首頁</a>
+            <h1 style="margin: 0;">${isViewAsAdmin ? '學員學習紀錄 (管理員檢視)' : '我的學習紀錄'}</h1>
+            ${isViewAsAdmin
+            ? '<button id="back-to-admin" class="btn" style="background-color: #6c757d;">&larr; 返回管理後台</button>'
+            : '<a href="#home" class="btn" style="background-color: #6c757d;">&larr; 回首頁</a>'
+        }
         </div>
-        <p style="color: #666; margin-bottom: 3rem;">使用者：${state.currentUser.userName} (${state.currentUser.userId})</p>
+        <p style="color: #666; margin-bottom: 3rem;">使用者：${userDisplayName}</p>
         <div id="progress-content" style="min-height: 300px;">
             <p style="text-align: center; color: #888;">載入中...</p>
         </div>
     </div>
     `;
 
+    if (isViewAsAdmin) {
+        div.querySelector('#back-to-admin').onclick = () => {
+            // 假設我們想回到學員管理頁籤
+            state.adminViewMode = 'users';
+            renderApp('#admin');
+        };
+    }
+
     const progressContent = div.querySelector('#progress-content');
 
     // 載入進度資料
-    const progressList = await getAllUserProgress(state.currentUser.userId);
+    const progressList = await getAllUserProgress(userId);
 
     if (progressList.length === 0) {
         progressContent.innerHTML = `
@@ -1410,7 +1491,7 @@ async function renderProgress() {
                                 <span>最後學習：${lastUpdate}</span>
                             </div>
                         </div>
-                        <a href="#course/${progress.courseId}" class="btn" style="background-color: ${themeColor};">繼續學習</a>
+                        ${!isViewAsAdmin ? `<a href="#course/${progress.courseId}" class="btn" style="background-color: ${themeColor};">繼續學習</a>` : ''}
                     </div>
                     
                     <div class="progress-bar" style="margin-bottom: 1rem;">
@@ -1466,6 +1547,108 @@ async function renderProgress() {
 
     html += '</div>';
     progressContent.innerHTML = html;
+
+    return div;
+}
+
+
+// Admin Check Single Course Stats view
+async function renderCourseStats(courseId) {
+    const course = state.courses.find(c => c.id === courseId);
+    const div = document.createElement('div');
+
+    if (!course) {
+        div.innerHTML = '查無此課程';
+        return div;
+    }
+
+    div.innerHTML = `
+        <div class="container mt-4">
+            <div class="flex justify-between items-center mb-4">
+                <h2>📊 課程學習狀況: ${course.title}</h2>
+                <button id="back-to-course-list" class="btn" style="background-color: #6c757d;">&larr; 返回列表</button>
+            </div>
+            <div id="stats-content">載入中...</div>
+        </div>
+     `;
+
+    div.querySelector('#back-to-course-list').onclick = () => {
+        state.adminViewMode = 'courses';
+        renderApp('#admin');
+    };
+
+    setTimeout(async () => {
+        const content = div.querySelector('#stats-content');
+        try {
+            // Get all progress for this course (Need a query for this optimally)
+            const q = query(collection(db, "userProgress"), where("courseId", "==", courseId));
+            const snapshot = await getDocs(q);
+            const records = [];
+            snapshot.forEach(doc => records.push(doc.data()));
+
+            // We also need user names map
+            const usersSnap = await getDocs(collection(db, "users"));
+            const userMap = {};
+            usersSnap.forEach(u => userMap[u.id] = u.data().userName);
+
+            if (records.length === 0) {
+                content.innerHTML = '<p class="text-center" style="color:#666; padding:2rem;">目前尚無學員開始此課程</p>';
+                return;
+            }
+
+            records.sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
+
+            content.innerHTML = `
+                <div style="background:white; padding:1.5rem; border-radius:8px; box-shadow:0 2px 8px rgba(0,0,0,0.05);">
+                    <p style="margin-bottom:1rem;">共 <strong>${records.length}</strong> 筆學習紀錄</p>
+                    <table style="width:100%; text-align:left; border-collapse: collapse;">
+                        <thead style="background:#f8f9fa;">
+                            <tr>
+                                <th style="padding:10px;">學員</th>
+                                <th style="padding:10px;">狀態</th>
+                                <th style="padding:10px;">進度</th>
+                                <th style="padding:10px;">最後更新</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${records.map(r => {
+                const Name = userMap[r.userId] || r.userName || r.userId;
+                const statusColor = r.status === 'completed' ? '#4CAF50' : r.status === 'in-progress' ? '#FF9800' : '#999';
+                const statusText = r.status === 'completed' ? '已完成' : r.status === 'in-progress' ? '進行中 ' : '未開始';
+
+                return `
+                                <tr style="border-bottom:1px solid #eee;">
+                                    <td style="padding:10px;">
+                                        <div style="font-weight:bold;">${Name}</div>
+                                        <div style="font-size:0.8rem; color:#888;">${r.userId}</div>
+                                    </td>
+                                    <td style="padding:10px;">
+                                        <span style="color:${statusColor}">${statusText}</span>
+                                    </td>
+                                    <td style="padding:10px;">
+                                        <div style="display:flex; align-items:center; gap:8px;">
+                                            <div style="flex:1; max-width:100px; height:6px; background:#eee; border-radius:3px;">
+                                                <div style="width:${r.completionRate}%; height:100%; background:${course.color || '#0ABAB5'}; border-radius:3px;"></div>
+                                            </div>
+                                            <span style="font-size:0.85rem;">${Math.floor(r.completionRate)}%</span>
+                                        </div>
+                                    </td>
+                                    <td style="padding:10px; font-size:0.9rem; color:#666;">
+                                        ${r.updatedAt ? new Date(r.updatedAt).toLocaleString('zh-TW') : '-'}
+                                    </td>
+                                </tr>
+                                `;
+            }).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+
+        } catch (e) {
+            console.error(e);
+            content.innerHTML = `<p style="color:red;">載入失敗: ${e.message}</p>`;
+        }
+    }, 0);
 
     return div;
 }
@@ -1721,6 +1904,7 @@ function renderAdmin() {
                            </div>
                        </div>
                        <div class="flex gap-2">
+                            <button class="btn view-stats-btn" style="background: #17a2b8; color: white; font-size: 0.8rem; padding: 4px 8px;">查看進度</button>
                             <button class="btn copy-link-btn" data-url="${courseUrl}" style="background: #e9ecef; color: #333; font-size: 0.8rem; padding: 4px 8px;">複製連結</button>
                             <button class="btn edit-btn" style="font-size: 0.8rem; padding: 4px 8px;">編輯</button>
                             <button class="btn delete-btn" style="background-color: #dc3545; color: white; font-size: 0.8rem; padding: 4px 8px;">刪除</button>
@@ -1734,6 +1918,12 @@ function renderAdmin() {
                         if (btn) btn.style.display = anyChecked ? 'block' : 'none';
                     };
 
+                    row.querySelector('.view-stats-btn').onclick = async () => {
+                        const workspace = container.querySelector('#admin-workspace');
+                        workspace.innerHTML = '載入中...'; // Quick feedback
+                        workspace.innerHTML = '';
+                        workspace.appendChild(await renderCourseStats(course.id));
+                    };
 
                     row.querySelector('.edit-btn').onclick = () => renderEditor(course);
                     row.querySelector('.delete-btn').onclick = async () => {
@@ -1875,6 +2065,7 @@ function renderAdmin() {
                                     <td style="padding: 1rem;">${u.courses.length}</td>
                                     <td style="padding: 1rem; color: #666;">${u.lastActive ? new Date(u.lastActive).toLocaleString('zh-TW') : '-'}</td>
                                     <td style="padding: 1rem; display: flex; gap: 0.5rem;">
+                                        <button class="btn view-user-progress-btn" data-userid="${u.userId}" style="padding: 4px 12px; font-size: 0.85rem; background:#17a2b8; color:white;">學習紀錄</button>
                                         <button class="btn edit-user-btn" data-userid="${u.userId}" style="padding: 4px 12px; font-size: 0.85rem;">編輯</button>
                                         <button class="btn delete-user-btn" data-userid="${u.userId}" data-username="${u.userName}" style="padding: 4px 12px; font-size: 0.85rem; background-color: #dc3545; color: white;">刪除</button>
                                     </td>
@@ -1891,6 +2082,17 @@ function renderAdmin() {
                     const userId = btn.dataset.userid;
                     const user = usersMap[userId];
                     renderUserEditor(user);
+                };
+            });
+
+            // Bind View Progress Buttons
+            card.querySelectorAll('.view-user-progress-btn').forEach(btn => {
+                btn.onclick = async () => {
+                    const userId = btn.dataset.userid;
+                    const workspace = container.querySelector('#admin-workspace');
+                    workspace.innerHTML = '載入中...';
+                    workspace.innerHTML = '';
+                    workspace.appendChild(await renderProgress(userId));
                 };
             });
 
@@ -2216,7 +2418,11 @@ function renderAdmin() {
                     </div>
                         <div class="grid gap-4" style="grid-template-columns: 1fr 1fr;">
                             <div><label style="font-size:0.9rem">顯示名稱</label><input type="text" class="unit-title-input" data-idx="${idx}" value="${part.title}" /></div>
-                            <div><label style="font-size:0.9rem">${isQuiz ? 'Google 表單網址' : '影片網址'}</label><input type="text" class="unit-url-input" data-idx="${idx}" value="${part.url || ''}" /></div>
+                            <div>
+                                <label style="font-size:0.9rem">${isQuiz ? 'Google 表單網址' : '影片網址'}</label>
+                                <input type="text" class="unit-url-input" data-idx="${idx}" value="${part.url || ''}" />
+                                ${isQuiz ? `<div style="margin-top:0.5rem;"><label style="font-size:0.8rem; color:#666;">防呆驗證碼 (選填)</label><input type="text" class="unit-code-input" data-idx="${idx}" value="${part.verificationCode || ''}" placeholder="例如: 1234" style="font-size:0.85rem; padding:4px;" /></div>` : ''}
+                            </div>
                         </div>
                     `;
                 unitContainer.appendChild(row);
@@ -2225,6 +2431,7 @@ function renderAdmin() {
             // Bind inputs
             unitContainer.querySelectorAll('.unit-title-input').forEach(i => i.oninput = (e) => editingCourse.parts[e.target.dataset.idx].title = e.target.value);
             unitContainer.querySelectorAll('.unit-url-input').forEach(i => i.oninput = (e) => editingCourse.parts[e.target.dataset.idx].url = e.target.value);
+            unitContainer.querySelectorAll('.unit-code-input').forEach(i => i.oninput = (e) => editingCourse.parts[e.target.dataset.idx].verificationCode = e.target.value);
             unitContainer.querySelectorAll('.delete-unit-btn').forEach(btn => btn.onclick = (e) => {
                 editingCourse.parts.splice(e.target.dataset.idx, 1);
                 renderUnits();
