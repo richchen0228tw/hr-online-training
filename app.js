@@ -293,6 +293,11 @@ function showUserDialog() {
             document.body.removeChild(overlay);
             resolve(true);
 
+            // Redirect to home if on admin route to avoid confusion
+            if (window.location.hash === '#admin') {
+                window.location.hash = '#home';
+            }
+
             // Re-render home to respect permissions with new user
             if (window.location.hash === '' || window.location.hash === '#home') {
                 renderHome();
@@ -1383,7 +1388,15 @@ function renderAdmin() {
 
         container.querySelector('#btn-logout').onclick = () => {
             if (confirm('確定要登出嗎？')) {
+                // Prevent routing logic from triggering when we clear the hash
+                window.removeEventListener('hashchange', handleRoute);
+
                 state.adminLoggedIn = false;
+                // Clear app content immediately to prevent flashing frontend before reload
+                document.getElementById('app').innerHTML = '';
+
+                // Reset URL to root and reload
+                window.location.hash = '';
                 window.location.reload();
             }
         };
@@ -1695,7 +1708,10 @@ function renderAdmin() {
             card.innerHTML = `
                 <div class="flex justify-between items-center mb-4">
                      <h2 style="margin:0;">學員管理 (${userList.length} 人)</h2>
-                     <button class="btn" id="btn-batch-delete-users" style="background-color: #dc3545; display: none;">🗑️ 刪除所選學員</button>
+                     <div class="flex gap-2">
+                        <button class="btn" id="btn-batch-delete-users" style="background-color: #dc3545; display: none;">🗑️ 刪除所選學員</button>
+                        <button class="btn" id="btn-add-user">+ 新增學員</button>
+                     </div>
                 </div>
                 <div style="overflow-x: auto;">
                     <table style="width: 100%; border-collapse: collapse;">
@@ -1808,6 +1824,11 @@ function renderAdmin() {
                 }
             };
 
+            // Bind Add User Button
+            card.querySelector('#btn-add-user').onclick = () => {
+                renderUserEditor(null);
+            };
+
             workspace.innerHTML = '';
             workspace.appendChild(card);
 
@@ -1840,6 +1861,9 @@ function renderAdmin() {
     }
 
     function renderUserEditor(user) {
+        const isNew = !user;
+        const editingUser = user || { userId: '', userName: '', email: '' };
+
         const workspace = container.querySelector('#admin-workspace');
 
         const card = document.createElement('div');
@@ -1848,32 +1872,36 @@ function renderAdmin() {
         card.style.borderRadius = '8px';
         card.style.boxShadow = '0 4px 10px rgba(0,0,0,0.05)';
 
+        const idInputHtml = isNew
+            ? `<input type="text" id="edit-user-id" value="" placeholder="請輸入員工編號 (例如: EMP001)" style="width: 100%; padding: 10px; border: 1px solid #ddd;">`
+            : `<input type="text" value="${editingUser.userId}" disabled style="width: 100%; padding: 10px; background: #f5f5f5; border: 1px solid #ddd; cursor: not-allowed;">
+               <p style="font-size:0.85rem; color:#999; margin-top:0.25rem;">員工編號無法修改</p>`;
+
         card.innerHTML = `
             <div class="flex justify-between items-center mb-4">
-                <h2 style="margin:0;">編輯學員資料</h2>
+                <h2 style="margin:0;">${isNew ? '新增學員' : '編輯學員資料'}</h2>
                 <button class="btn" id="btn-back-users" style="background-color: #6c757d;">&larr; 返回列表</button>
             </div>
             
             <div style="max-width: 600px; margin: 2rem auto; border: 1px solid #eee; padding: 2rem; border-radius: 8px;">
                 <div class="form-group margin-bottom: 1.5rem;">
                     <label style="display:block; margin-bottom:0.5rem; font-weight:bold;">員工編號</label>
-                    <input type="text" value="${user.userId}" disabled style="width: 100%; padding: 10px; background: #f5f5f5; border: 1px solid #ddd; cursor: not-allowed;">
-                    <p style="font-size:0.85rem; color:#999; margin-top:0.25rem;">員工編號無法修改</p>
+                    ${idInputHtml}
                 </div>
                 
                 <div class="form-group margin-bottom: 1.5rem;">
                     <label style="display:block; margin-bottom:0.5rem; font-weight:bold;">姓名</label>
-                    <input type="text" id="edit-user-name" value="${user.userName}" style="width: 100%; padding: 10px; border: 1px solid #ddd;">
+                    <input type="text" id="edit-user-name" value="${editingUser.userName}" style="width: 100%; padding: 10px; border: 1px solid #ddd;">
                 </div>
                 
                 <div class="form-group margin-bottom: 2rem;">
                     <label style="display:block; margin-bottom:0.5rem; font-weight:bold;">Email</label>
-                    <input type="email" id="edit-user-email" value="${user.email || ''}" style="width: 100%; padding: 10px; border: 1px solid #ddd;">
+                    <input type="email" id="edit-user-email" value="${editingUser.email || ''}" style="width: 100%; padding: 10px; border: 1px solid #ddd;">
                 </div>
                 
                 <div class="flex justify-end gap-2">
                     <button class="btn" id="btn-cancel-user" style="background: #ccc; color: #333;">取消</button>
-                    <button class="btn" id="btn-save-user">儲存變更</button>
+                    <button class="btn" id="btn-save-user">${isNew ? '新增學員' : '儲存變更'}</button>
                 </div>
             </div>
         `;
@@ -1884,6 +1912,25 @@ function renderAdmin() {
         card.querySelector('#btn-cancel-user').onclick = goBack;
 
         card.querySelector('#btn-save-user').onclick = async () => {
+            let userId = editingUser.userId;
+
+            // Check ID if new
+            if (isNew) {
+                const idInput = card.querySelector('#edit-user-id');
+                if (idInput) {
+                    userId = idInput.value.trim().toUpperCase();
+                }
+                if (!userId) {
+                    alert('請輸入員工編號');
+                    return;
+                }
+                // Check format (optional, e.g. alphanumeric)
+                if (!/^[A-Z0-9]+$/i.test(userId)) {
+                    alert('員工編號只能包含英數字');
+                    return;
+                }
+            }
+
             const newName = card.querySelector('#edit-user-name').value.trim();
             const newEmail = card.querySelector('#edit-user-email').value.trim();
 
@@ -1899,14 +1946,32 @@ function renderAdmin() {
             }
 
             try {
-                // Update Firestore
-                await setDoc(doc(db, "users", user.userId), {
-                    userName: newName,
-                    email: newEmail,
-                    // Preserve createdAt? setDoc(..., {merge: true}) will preserve it.
-                }, { merge: true });
+                if (isNew) {
+                    // Check if exists
+                    const docRef = doc(db, "users", userId);
+                    const docSnap = await getDoc(docRef);
+                    if (docSnap.exists()) {
+                        alert('此員工編號已存在');
+                        return;
+                    }
 
-                alert('儲存成功');
+                    await setDoc(docRef, {
+                        userId,
+                        userName: newName,
+                        email: newEmail,
+                        createdAt: new Date().toISOString()
+                    });
+                    alert('新增成功');
+                } else {
+                    // Update Firestore
+                    await setDoc(doc(db, "users", userId), {
+                        userName: newName,
+                        email: newEmail,
+                        // Preserve createdAt? setDoc(..., {merge: true}) will preserve it.
+                    }, { merge: true });
+                    alert('儲存成功');
+                }
+
                 renderUserManagement();
 
             } catch (e) {
