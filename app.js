@@ -616,6 +616,14 @@ async function renderCourseDetail(id) {
         return createErrorView('非課程觀看時間，請洽HR', false);
     }
 
+    // 2. Check User Permission
+    if (course.allowedUserIds && course.allowedUserIds.length > 0) {
+        const userId = state.currentUser ? state.currentUser.userId : null;
+        if (!userId || !course.allowedUserIds.includes(userId)) {
+            return createErrorView('您沒有權限觀看此課程');
+        }
+    }
+
     const themeColor = course.color || '#0ABAB5';
     const div = document.createElement('div');
 
@@ -1241,78 +1249,158 @@ async function renderProgress() {
         return div;
     }
 
-    // 渲染進度列表
-    let html = '<div class="progress-list" style="display: grid; gap: 1.5rem;">';
+    // ----------------------------------------------------
+    // 新增邏輯：依年份/月份分組
+    // ----------------------------------------------------
 
-    for (const progress of progressList) {
-        const statusColor = progress.status === 'completed' ? '#4CAF50' :
-            progress.status === 'in-progress' ? '#FF9800' : '#999';
-        const statusText = progress.status === 'completed' ? '已完成' :
-            progress.status === 'in-progress' ? '學習中' : '未開始';
-
-        const lastUpdate = progress.updatedAt ? new Date(progress.updatedAt).toLocaleString('zh-TW') : '無';
-
-        // 找到對應的課程以獲取顏色
+    // 1. 資料處理與排序
+    const enrichedList = progressList.map(progress => {
         const course = state.courses.find(c => c.id === progress.courseId);
-        const themeColor = course?.color || '#0ABAB5';
+        // 日期判斷優先順序：實際開課日 > 線上開課日 > 預設
+        const dateStr = course?.actualStartDate || course?.startDate;
+        let dateObj = new Date(0);
+        let year = '其他';
+        let month = '其他';
 
+        if (dateStr) {
+            const d = new Date(dateStr);
+            if (!isNaN(d.getTime())) {
+                dateObj = d;
+                year = d.getFullYear();
+                month = d.getMonth() + 1;
+            }
+        }
+
+        return { progress, course, dateObj, year, month };
+    });
+
+    // 依日期由新到舊排序
+    enrichedList.sort((a, b) => b.dateObj - a.dateObj);
+
+    // 2. 分組
+    const groups = {}; // { year: { month: [items] } }
+    enrichedList.forEach(item => {
+        const y = item.year;
+        const m = item.month;
+        if (!groups[y]) groups[y] = {};
+        if (!groups[y][m]) groups[y][m] = [];
+        groups[y][m].push(item);
+    });
+
+    // 3. 渲染 HTML
+    let html = '<div class="progress-container">';
+
+    // 年份由大到小
+    const sortedYears = Object.keys(groups).sort((a, b) => {
+        if (a === '其他') return 1;
+        if (b === '其他') return -1;
+        return b - a;
+    });
+
+    for (const year of sortedYears) {
+        // 年份區塊
         html += `
-        <div class="progress-card" style="
-    background: white;
-    padding: 1.5rem;
-    border-radius: 8px;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
-    border-left: 5px solid ${themeColor};
-    ">
-        <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 1rem;">
-                    <div>
-                        <h3 style="margin: 0 0 0.5rem 0;">${progress.courseName}</h3>
-                        <div style="display: flex; gap: 1rem; font-size: 0.9rem; color: #666;">
-                            <span style="color: ${statusColor};">⬤ ${statusText}</span>
-                            <span>最後學習：${lastUpdate}</span>
-                        </div>
-                    </div>
-                    <a href="#course/${progress.courseId}" class="btn" style="background-color: ${themeColor};">繼續學習</a>
-                </div>
-                
-                <div class="progress-bar" style="margin-bottom: 1rem;">
-                    <div class="progress-fill" style="width: ${progress.completionRate}%; background-color: ${themeColor};"></div>
-                </div>
-                
-                <div style="display: flex; justify-content: space-between; font-size: 0.9rem; color: #888; margin-bottom: 1rem;">
-                    <span>完成度：${progress.completionRate}%</span>
-                    <span>${progress.units.filter(u => u.completed || u.quizCompleted).length} / ${progress.units.length} 單元</span>
-                </div>
-                
-                <details style="margin-top: 1rem;">
-                    <summary style="cursor: pointer; color: var(--primary-color); font-size: 0.9rem; user-select: none;">查看詳細進度</summary>
-                    <div style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #eee;">
-                        ${progress.units.map((unit, idx) => {
-            const unitCompleted = unit.completed || unit.quizCompleted;
-            const iconColor = unitCompleted ? '#4CAF50' : '#ddd';
-            const progressPercent = unit.duration > 0 ? Math.round((unit.lastPosition / unit.duration) * 100) : 0;
+        <details open style="margin-bottom: 2rem;">
+            <summary style="font-size: 1.5rem; font-weight: bold; cursor: pointer; padding: 0.75rem; background: #fafafa; border-radius: 8px; margin-bottom: 1rem; color: #333;">
+                📅 ${year} 年度
+            </summary>
+            <div style="padding-left: 1rem;">
+        `;
 
-            return `
-                                <div style="padding: 0.75rem; margin-bottom: 0.5rem; background: var(--light-gray); border-radius: 4px; display: flex; justify-content: space-between; align-items: center;">
-                                    <div style="display: flex; align-items: center; gap: 0.75rem;">
-                                        <span style="color: ${iconColor}; font-size: 1.2rem;">${unitCompleted ? '✓' : '○'}</span>
-                                        <div>
-                                            <div style="font-weight: 500;">${unit.unitTitle}</div>
-                                            <div style="font-size: 0.85rem; color: #888;">
-                                                ${unit.type === 'video' ? `觀看進度: ${progressPercent}%` : '測驗'}
-                                                ${unit.viewCount > 0 ? ` • 觀看次數: ${unit.viewCount}` : ''}
+        // 月份由大到小
+        const monthsInYear = groups[year];
+        const sortedMonths = Object.keys(monthsInYear).sort((a, b) => {
+            if (a === '其他') return 1;
+            if (b === '其他') return -1;
+            return b - a;
+        });
+
+        for (const month of sortedMonths) {
+            html += `
+            <details open style="margin-bottom: 1.5rem;">
+                <summary style="font-size: 1.2rem; font-weight: 500; cursor: pointer; padding: 0.5rem; color: #555; margin-bottom: 0.5rem;">
+                     ${month} 月
+                </summary>
+                <div class="progress-list" style="display: grid; gap: 1.5rem;">
+            `;
+
+            for (const { progress, course } of monthsInYear[month]) {
+                const themeColor = course?.color || '#0ABAB5';
+                const statusColor = progress.status === 'completed' ? '#4CAF50' :
+                    progress.status === 'in-progress' ? '#FF9800' : '#999';
+                const statusText = progress.status === 'completed' ? '已完成' :
+                    progress.status === 'in-progress' ? '學習中' : '未開始';
+                const lastUpdate = progress.updatedAt ? new Date(progress.updatedAt).toLocaleString('zh-TW') : '無';
+
+                html += `
+                <div class="progress-card" style="
+                    background: white;
+                    padding: 1.5rem;
+                    border-radius: 8px;
+                    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+                    border-left: 5px solid ${themeColor};
+                ">
+                    <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 1rem;">
+                        <div>
+                            <h3 style="margin: 0 0 0.5rem 0;">${progress.courseName}</h3>
+                            <div style="display: flex; gap: 1rem; font-size: 0.9rem; color: #666;">
+                                <span style="color: ${statusColor};">⬤ ${statusText}</span>
+                                <span>最後學習：${lastUpdate}</span>
+                            </div>
+                        </div>
+                        <a href="#course/${progress.courseId}" class="btn" style="background-color: ${themeColor};">繼續學習</a>
+                    </div>
+                    
+                    <div class="progress-bar" style="margin-bottom: 1rem;">
+                        <div class="progress-fill" style="width: ${progress.completionRate}%; background-color: ${themeColor};"></div>
+                    </div>
+                    
+                    <div style="display: flex; justify-content: space-between; font-size: 0.9rem; color: #888; margin-bottom: 1rem;">
+                        <span>完成度：${progress.completionRate}%</span>
+                        <span>${progress.units.filter(u => u.completed || u.quizCompleted).length} / ${progress.units.length} 單元</span>
+                    </div>
+                    
+                    <details style="margin-top: 1rem;">
+                        <summary style="cursor: pointer; color: var(--primary-color); font-size: 0.9rem; user-select: none;">查看詳細進度</summary>
+                        <div style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #eee;">
+                            ${progress.units.map((unit, idx) => {
+                    const unitCompleted = unit.completed || unit.quizCompleted;
+                    const iconColor = unitCompleted ? '#4CAF50' : '#ddd';
+                    const progressPercent = unit.duration > 0 ? Math.round((unit.lastPosition / unit.duration) * 100) : 0;
+
+                    return `
+                                    <div style="padding: 0.75rem; margin-bottom: 0.5rem; background: var(--light-gray); border-radius: 4px; display: flex; justify-content: space-between; align-items: center;">
+                                        <div style="display: flex; align-items: center; gap: 0.75rem;">
+                                            <span style="color: ${iconColor}; font-size: 1.2rem;">${unitCompleted ? '✓' : '○'}</span>
+                                            <div>
+                                                <div style="font-weight: 500;">${unit.unitTitle}</div>
+                                                <div style="font-size: 0.85rem; color: #888;">
+                                                    ${unit.type === 'video' ? `觀看進度: ${progressPercent}%` : '測驗'}
+                                                    ${unit.viewCount > 0 ? ` • 觀看次數: ${unit.viewCount}` : ''}
+                                                </div>
                                             </div>
                                         </div>
+                                        ${unitCompleted ? '<span style="color: #4CAF50; font-size: 0.9rem;">已完成</span>' : ''}
                                     </div>
-                                    ${unitCompleted ? '<span style="color: #4CAF50; font-size: 0.9rem;">已完成</span>' : ''}
-                                </div>
-                            `;
-        }).join('')}
-                    </div>
-                </details>
-            </div >
+                                `;
+                }).join('')}
+                        </div>
+                    </details>
+                </div> <!-- End Card -->
+                `;
+            } // End Loop for items in month
+
+            html += `
+                </div>
+            </details> <!-- End Month Details -->
+            `;
+        } // End Loop for months
+
+        html += `
+            </div>
+        </details> <!-- End Year Details -->
         `;
-    }
+    } // End Loop for years
 
     html += '</div>';
     progressContent.innerHTML = html;
