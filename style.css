@@ -337,3 +337,87 @@ input:checked+.slider:before {
 .slider.round:before {
     border-radius: 50%;
 }
+/* Tooltip container */
+.tooltip {
+  position: relative;
+  display: inline-block;
+  cursor: help;
+  border-bottom: 1px dashed #666;
+}
+
+/* Tooltip text */
+.tooltip .tooltiptext {
+  visibility: hidden;
+  width: 220px;
+  background-color: #333;
+  color: #fff;
+  text-align: center;
+  padding: 8px 12px;
+  border-radius: 6px;
+  
+  /* Position */
+  position: absolute;
+  z-index: 1000;
+  bottom: 125%;
+  left: 50%;
+  margin-left: -110px;
+  
+  /* Fade */
+  opacity: 0;
+  transition: opacity 0.3s;
+  
+  /* Text */
+  font-size: 0.85rem;
+  line-height: 1.4;
+  font-weight: normal;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+}
+
+/* Tooltip arrow */
+.tooltip .tooltiptext::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  margin-left: -5px;
+  border-width: 5px;
+  border-style: solid;
+  border-color: #333 transparent transparent transparent;
+}
+
+/* Show on hover */
+.tooltip:hover .tooltiptext {
+  visibility: visible;
+  opacity: 1;
+}
+
+/* Analytics Cards */
+.analytics-card {
+    background: white;
+    padding: 1.5rem;
+    border-radius: 12px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+    border: 1px solid #E0E0E0;
+    transition: transform 0.2s;
+}
+
+.analytics-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+}
+
+.metric-value {
+    font-size: 2rem;
+    font-weight: 700;
+    color: var(--primary-color);
+    margin: 0.5rem 0;
+}
+
+.metric-label {
+    font-size: 1rem;
+    color: #666;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+

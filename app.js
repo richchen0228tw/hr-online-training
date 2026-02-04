@@ -1,5 +1,7 @@
 import { db } from './firebase-config.js';
 import { collection, getDocs, addDoc, updateDoc, doc, deleteDoc, query, where, setDoc, getDoc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+import { BehavioralTracker } from './behavioral_tracking.js';
+import { MetricsEngine } from './metrics_engine.js';
 
 // State
 const state = {
@@ -17,6 +19,8 @@ let currentYouTubePlayer = null;
 let youtubeSaveInterval = null;
 let youtubeRestrictionInterval = null;
 let isYouTubeAPIReady = false;
+let currentTracker = null;
+let currentEngine = null;
 
 // YouTube API Ready Callback
 window.onYouTubeIframeAPIReady = function () {
@@ -385,7 +389,7 @@ async function loadProgress(userId, courseId) {
     }
 }
 
-async function updateVideoPosition(userId, courseId, courseName, unitIndex, position, duration, allUnits) {
+async function updateVideoPosition(userId, courseId, courseName, unitIndex, position, duration, allUnits, metrics = null) {
     // 計算是否完成（觀看 >= 90%）
     const completed = duration > 0 && (position / duration) >= 0.9;
 
@@ -395,6 +399,12 @@ async function updateVideoPosition(userId, courseId, courseName, unitIndex, posi
     allUnits[unitIndex].duration = duration;
     allUnits[unitIndex].completed = completed;
     allUnits[unitIndex].lastAccessTime = new Date().toISOString();
+
+    allUnits[unitIndex].lastAccessTime = new Date().toISOString();
+
+    if (metrics) {
+        allUnits[unitIndex].behavioralMetrics = metrics;
+    }
 
     return saveProgress(userId, courseId, courseName, allUnits);
 }
@@ -809,6 +819,13 @@ async function renderCourseDetail(id) {
         const savedPosition = unitProgressData[unitIndex]?.lastPosition || 0;
         console.log(`[YouTube] 準備播放 Video ID: ${videoId}, 恢復位置: ${savedPosition.toFixed(1)}秒`);
 
+        // 初始化 Tracker
+        if (state.currentUser) {
+            currentTracker = new BehavioralTracker({ userId: state.currentUser.userId });
+            currentEngine = new MetricsEngine();
+            currentTracker.onEventTracked = (e) => currentEngine.processEvent(e);
+        }
+
         currentYouTubePlayer = new YT.Player('youtube-player', {
             height: '500',
             width: '100%',
@@ -862,8 +879,15 @@ async function renderCourseDetail(id) {
                             unitIndex,
                             time,
                             duration,
-                            unitProgressData
+                            duration,
+                            unitProgressData,
+                            currentEngine ? currentEngine.getMetrics() : null
                         );
+
+                        // Engine Tick
+                        if (currentEngine) {
+                            currentEngine.tick(true, time, currentYouTubePlayer.getPlaybackRate());
+                        }
                         console.log(`[YouTube] 每 10 秒自動儲存: ${time.toFixed(1)}秒 / ${duration.toFixed(1)}秒`);
                     }
                 }
@@ -876,6 +900,13 @@ async function renderCourseDetail(id) {
             const time = currentYouTubePlayer.getCurrentTime();
             const duration = currentYouTubePlayer.getDuration();
 
+            // Log Event to Tracker
+            if (currentTracker) {
+                if (event.data === YT.PlayerState.PLAYING) currentTracker.trackEvent('video_player_event', 'play');
+                if (event.data === YT.PlayerState.PAUSED) currentTracker.trackEvent('video_player_event', 'pause');
+                if (event.data === YT.PlayerState.ENDED) currentTracker.trackEvent('video_player_event', 'complete');
+            }
+
             // YT.PlayerState: UNSTARTED(-1), ENDED(0), PLAYING(1), PAUSED(2), BUFFERING(3), CUED(5)
             if (event.data === YT.PlayerState.PAUSED) {
                 // 暫停時儲存
@@ -887,7 +918,8 @@ async function renderCourseDetail(id) {
                         unitIndex,
                         time,
                         duration,
-                        unitProgressData
+                        unitProgressData,
+                        currentEngine ? currentEngine.getMetrics() : null
                     );
                     console.log(`[YouTube] 暫停時儲存位置: ${time.toFixed(1)}秒`);
                 }
@@ -905,7 +937,8 @@ async function renderCourseDetail(id) {
                     unitIndex,
                     duration,
                     duration,
-                    unitProgressData
+                    unitProgressData,
+                    currentEngine ? currentEngine.getMetrics() : null
                 );
 
                 // 更新完成標記
@@ -1151,6 +1184,13 @@ async function renderCourseDetail(id) {
 
                                 // ✅ 修正：在 loadedmetadata 事件後才設定播放位置
                                 video.addEventListener('loadedmetadata', () => {
+                                    // 初始化 Tracker (HTML5)
+                                    if (state.currentUser) {
+                                        currentTracker = new BehavioralTracker({ userId: state.currentUser.userId });
+                                        currentEngine = new MetricsEngine();
+                                        currentTracker.attachToVideoElement(video);
+                                        currentTracker.onEventTracked = (e) => currentEngine.processEvent(e);
+                                    }
                                     // 記錄影片總時長
                                     unitProgressData[index].duration = video.duration;
 
@@ -1190,8 +1230,13 @@ async function renderCourseDetail(id) {
                                                 index,
                                                 video.currentTime,
                                                 video.duration,
-                                                unitProgressData
+                                                unitProgressData,
+                                                currentEngine ? currentEngine.getMetrics() : null
                                             );
+
+                                            if (currentEngine) {
+                                                currentEngine.tick(true, video.currentTime, video.playbackRate);
+                                            }
 
                                             // 檢查是否達成完成條件
                                             if (unitProgressData[index].completed && !isCompleted) {
@@ -1217,7 +1262,8 @@ async function renderCourseDetail(id) {
                                             index,
                                             video.currentTime,
                                             video.duration,
-                                            unitProgressData
+                                            unitProgressData,
+                                            currentEngine ? currentEngine.getMetrics() : null
                                         );
                                         console.log(`[進度追蹤] 暫停時儲存位置: ${video.currentTime.toFixed(1)}秒`);
                                     }
@@ -1233,7 +1279,8 @@ async function renderCourseDetail(id) {
                                             index,
                                             video.currentTime,
                                             video.duration,
-                                            unitProgressData
+                                            unitProgressData,
+                                            currentEngine ? currentEngine.getMetrics() : null
                                         );
                                         console.log(`[進度追蹤] 拖曳後儲存位置: ${video.currentTime.toFixed(1)}秒`);
                                     }
@@ -1248,7 +1295,8 @@ async function renderCourseDetail(id) {
                                         index,
                                         video.currentTime,
                                         video.duration,
-                                        unitProgressData
+                                        unitProgressData,
+                                        currentEngine ? currentEngine.getMetrics() : null
                                     );
                                     btn.innerHTML = btn.textContent.replace(' ✓', '') + ' <span style="color: #4CAF50;">✓</span>';
                                     updateCourseProgress();
@@ -1502,16 +1550,35 @@ async function renderProgress(targetUserId = null) {
                         <span>完成度：${progress.completionRate}%</span>
                         <span>${progress.units.filter(u => u.completed || u.quizCompleted).length} / ${progress.units.length} 單元</span>
                     </div>
+
+                    ${isViewAsAdmin ? (() => {
+                        const totalTES = progress.units.reduce((acc, u) => acc + (u.behavioralMetrics?.trueEngagementScore || 0), 0);
+                        const totalSeek = progress.units.reduce((acc, u) => acc + (u.behavioralMetrics?.seekBackCount || 0), 0);
+                        return `
+                        <div style="margin-bottom: 1rem; padding: 0.75rem; background: #f0f9ff; border-radius: 6px; border: 1px dashed #38bdf8; display: flex; align-items: center; gap: 1.5rem; font-size: 0.9rem;">
+                            <strong style="color: #0284c7;">📊 行為指標</strong>
+                            <span>
+                                <span title="True Engagement Score (真實投入分數)">TES:</span> 
+                                <span style="font-family: monospace; font-weight: bold; color: #0ea5e9;">${totalTES.toFixed(1)}</span>
+                            </span>
+                            <span>
+                                <span title="Seek Back Count (回放次數)">回放:</span> 
+                                <span style="font-family: monospace; font-weight: bold; color: #10b981;">${totalSeek}</span> 次
+                            </span>
+                             <span style="color: #999; font-size: 0.8rem;">(僅管理員可見)</span>
+                        </div>
+                        `;
+                    })() : ''}
                     
                     <details style="margin-top: 1rem;">
                         <summary style="cursor: pointer; color: var(--primary-color); font-size: 0.9rem; user-select: none;">查看詳細進度</summary>
                         <div style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #eee;">
                             ${progress.units.map((unit, idx) => {
-                    const unitCompleted = unit.completed || unit.quizCompleted;
-                    const iconColor = unitCompleted ? '#4CAF50' : '#ddd';
-                    const progressPercent = unit.duration > 0 ? Math.round((unit.lastPosition / unit.duration) * 100) : 0;
+                        const unitCompleted = unit.completed || unit.quizCompleted;
+                        const iconColor = unitCompleted ? '#4CAF50' : '#ddd';
+                        const progressPercent = unit.duration > 0 ? Math.round((unit.lastPosition / unit.duration) * 100) : 0;
 
-                    return `
+                        return `
                                     <div style="padding: 0.75rem; margin-bottom: 0.5rem; background: var(--light-gray); border-radius: 4px; display: flex; justify-content: space-between; align-items: center;">
                                         <div style="display: flex; align-items: center; gap: 0.75rem;">
                                             <span style="color: ${iconColor}; font-size: 1.2rem;">${unitCompleted ? '✓' : '○'}</span>
@@ -1526,7 +1593,7 @@ async function renderProgress(targetUserId = null) {
                                         ${unitCompleted ? '<span style="color: #4CAF50; font-size: 0.9rem;">已完成</span>' : ''}
                                     </div>
                                 `;
-                }).join('')}
+                    }).join('')}
                         </div>
                     </details>
                 </div> <!-- End Card -->
@@ -1607,6 +1674,7 @@ async function renderCourseStats(courseId) {
                                 <th style="padding:10px;">學員</th>
                                 <th style="padding:10px;">狀態</th>
                                 <th style="padding:10px;">進度</th>
+                                <th style="padding:10px;">行為指標 (TES/興趣)</th>
                                 <th style="padding:10px;">最後更新</th>
                             </tr>
                         </thead>
@@ -1632,6 +1700,13 @@ async function renderCourseStats(courseId) {
                                             </div>
                                             <span style="font-size:0.85rem;">${Math.floor(r.completionRate)}%</span>
                                         </div>
+                                    </td>
+                                    <td style="padding:10px;">
+                                         ${(() => {
+                        const totalTES = r.units ? r.units.reduce((acc, u) => acc + (u.behavioralMetrics?.trueEngagementScore || 0), 0) : 0;
+                        const totalSeek = r.units ? r.units.reduce((acc, u) => acc + (u.behavioralMetrics?.seekBackCount || 0), 0) : 0;
+                        return `<span style="font-family:monospace; color:#38bdf8; font-weight:bold;">${totalTES.toFixed(1)}</span> / <span style="font-family:monospace; color:#4ade80;">${totalSeek}</span>`;
+                    })()}
                                     </td>
                                     <td style="padding:10px; font-size:0.9rem; color:#666;">
                                         ${r.updatedAt ? new Date(r.updatedAt).toLocaleString('zh-TW') : '-'}
@@ -1712,6 +1787,7 @@ function renderAdmin() {
                 <div class="flex gap-2">
                     <button id="tab-courses" class="btn" style="${state.adminViewMode === 'courses' ? 'background:white; color:var(--primary-color);' : 'background:transparent; color:white; border:1px solid white;'}">課程列表</button>
                     <button id="tab-users" class="btn" style="${state.adminViewMode === 'users' ? 'background:white; color:var(--primary-color);' : 'background:transparent; color:white; border:1px solid white;'}">學員管理</button>
+                    <button id="tab-behavior" class="btn" style="${state.adminViewMode === 'behavior' ? 'background:white; color:var(--primary-color);' : 'background:transparent; color:white; border:1px solid white;'}">行為分析</button>
                 </div>
             </div>
         </div>
@@ -1720,6 +1796,75 @@ function renderAdmin() {
 
         container.querySelector('#tab-courses').onclick = () => { state.adminViewMode = 'courses'; renderApp('#admin'); };
         container.querySelector('#tab-users').onclick = () => { state.adminViewMode = 'users'; renderApp('#admin'); };
+        container.querySelector('#tab-behavior').onclick = () => { state.adminViewMode = 'behavior'; renderApp('#admin'); };
+    }
+
+    // --- CSS for Tooltips ---
+    const styleId = 'behavior-dashboard-styles';
+    if (!document.getElementById(styleId)) {
+        const style = document.createElement('style');
+        style.id = styleId;
+        style.textContent = `
+            .tooltip-container {
+                position: relative;
+                display: inline-block;
+                cursor: help;
+                border-bottom: 1px dashed #666;
+            }
+            .tooltip-text {
+                visibility: hidden;
+                width: 250px;
+                background-color: #333;
+                color: #fff;
+                text-align: left;
+                border-radius: 6px;
+                padding: 10px;
+                position: absolute;
+                z-index: 100;
+                bottom: 125%;
+                left: 50%;
+                margin-left: -125px;
+                opacity: 0;
+                transition: opacity 0.3s;
+                font-size: 0.85rem;
+                line-height: 1.4;
+                font-weight: normal;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+            }
+            .tooltip-text::after {
+                content: "";
+                position: absolute;
+                top: 100%;
+                left: 50%;
+                margin-left: -5px;
+                border-width: 5px;
+                border-style: solid;
+                border-color: #333 transparent transparent transparent;
+            }
+            .tooltip-container:hover .tooltip-text {
+                visibility: visible;
+                opacity: 1;
+            }
+            .kp-card {
+                background: white;
+                padding: 1.5rem;
+                border-radius: 8px;
+                box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+                flex: 1;
+                text-align: center;
+            }
+            .kp-value {
+                font-size: 2.5rem;
+                font-weight: bold;
+                color: var(--primary-color);
+                margin: 0.5rem 0;
+            }
+            .kp-label {
+                color: #666;
+                font-size: 0.9rem;
+            }
+        `;
+        document.head.appendChild(style);
     }
 
     function renderCourseList() {
@@ -1967,6 +2112,145 @@ function renderAdmin() {
                 parts: []
             });
         };
+    }
+
+    async function renderBehavioralDashboard() {
+        console.log("Entering renderBehavioralDashboard");
+        renderAdminHeader();
+        const workspace = container.querySelector('#admin-workspace');
+        workspace.innerHTML = '<p style="text-align:center; padding:2rem;">正在分析行為數據...</p>';
+
+        try {
+            console.log("Fetching progress data...");
+            const allProgress = [];
+
+            // Try enabling direct access or fallback
+            if (typeof getAllProgress === 'function') {
+                try {
+                    const res = await getAllProgress();
+                    res.forEach(p => allProgress.push(p));
+                } catch (e) {
+                    console.warn("getAllProgress failed", e);
+                }
+            }
+
+            if (allProgress.length === 0) {
+                // Fallback to direct DB fetch
+                const snapshot = await getDocs(collection(db, "userProgress"));
+                snapshot.forEach(doc => allProgress.push(doc.data()));
+            }
+
+            console.log("Progress records found:", allProgress.length);
+
+            // Aggregation Logic
+            let totalTES = 0;
+            let totalSeekBacks = 0;
+            let totalSessions = 0;
+            const courseMetrics = {}; // { courseId: { title, tes, seeks, count } }
+
+            allProgress.forEach(p => {
+                if (p.units) {
+                    p.units.forEach(u => {
+                        if (u.behavioralMetrics) {
+                            const tes = u.behavioralMetrics.trueEngagementScore || 0;
+                            const seeks = u.behavioralMetrics.seekBackCount || 0;
+
+                            totalTES += tes;
+                            totalSeekBacks += seeks;
+                            totalSessions++;
+
+                            // Course Level Aggregation
+                            if (!courseMetrics[p.courseId]) {
+                                courseMetrics[p.courseId] = { title: p.courseName, tes: 0, seeks: 0, count: 0 };
+                            }
+                            courseMetrics[p.courseId].tes += tes;
+                            courseMetrics[p.courseId].seeks += seeks;
+                            courseMetrics[p.courseId].count++;
+                        }
+                    });
+                }
+            });
+
+            console.log("Aggregation complete", { totalTES, totalSessions });
+
+            const avgTES = totalSessions > 0 ? (totalTES / totalSessions).toFixed(1) : '0.0';
+
+            // Generate View
+            workspace.innerHTML = `
+                <div class="container">
+                    <h2 class="mb-4">📊 行為分析儀表板 (Behavioral Analytics)</h2>
+                    
+                    <!-- KPI Cards -->
+                    <div class="flex gap-4 mb-4" style="flex-wrap: wrap;">
+                        <div class="kp-card">
+                            <div class="kp-label tooltip-container">
+                                平均真實參與度 (TES)
+                                <span class="tooltip-text">
+                                    <strong>真實參與度 (True Engagement Score)</strong><br>
+                                    綜合考量觀看時長、播放速度與專注度的加權分數，比單純的「觀看時數」更能反映學習成效與專注品質。
+                                </span>
+                            </div>
+                            <div class="kp-value">${avgTES}</div>
+                            <div style="font-size:0.8rem; color:#888;">每單元平均分數</div>
+                        </div>
+                        <div class="kp-card">
+                            <div class="kp-label tooltip-container">
+                                總興趣回放次數 (Seek Backs)
+                                <span class="tooltip-text">
+                                    <strong>興趣回放 (Seek Back)</strong><br>
+                                    學員主動倒帶重看內容的次數 (倒退超過 5 秒)。<br>
+                                    高回放次數通常代表該段落是重點難點，或具有高度學習價值。
+                                </span>
+                            </div>
+                            <div class="kp-value" style="color: #4CAF50;">${totalSeekBacks}</div>
+                            <div style="font-size:0.8rem; color:#888;">全平台累計</div>
+                        </div>
+                        <div class="kp-card">
+                            <div class="kp-label">分析樣本數</div>
+                            <div class="kp-value" style="color: #FF9800;">${totalSessions}</div>
+                            <div style="font-size:0.8rem; color:#888;">學習單元紀錄</div>
+                        </div>
+                    </div>
+
+                    <!-- Course Breakdown -->
+                    <div style="background:white; padding:2rem; border-radius:8px; box-shadow:0 4px 10px rgba(0,0,0,0.05);">
+                        <h3 class="mb-4">各課程參與度排行</h3>
+                        <table style="width:100%; text-align:left; border-collapse: collapse;">
+                            <thead style="background:#f8f9fa;">
+                                <tr>
+                                    <th style="padding:1rem;">課程名稱</th>
+                                    <th style="padding:1rem;">平均 TES</th>
+                                    <th style="padding:1rem;">興趣回放次數</th>
+                                    <th style="padding:1rem;">紀錄數</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${Object.values(courseMetrics).sort((a, b) => (b.tes / b.count) - (a.tes / a.count)).map(c => `
+                                    <tr style="border-bottom:1px solid #eee;">
+                                        <td style="padding:1rem; font-weight:bold;">${c.title}</td>
+                                        <td style="padding:1rem;">
+                                            <div style="display:flex; align-items:center; gap:10px;">
+                                                <div style="width:100px; height:8px; background:#eee; border-radius:4px;">
+                                                    <div style="width:${Math.min(100, (c.tes / c.count) * 2)}%; height:100%; background:var(--primary-color); border-radius:4px;"></div>
+                                                </div>
+                                                <span>${(c.tes / c.count).toFixed(1)}</span>
+                                            </div>
+                                        </td>
+                                        <td style="padding:1rem; color:#4CAF50; font-weight:bold;">${c.seeks}</td>
+                                        <td style="padding:1rem; color:#888;">${c.count}</td>
+                                    </tr>
+                                `).join('')}
+                                ${Object.keys(courseMetrics).length === 0 ? '<tr><td colspan="4" style="padding:2rem; text-align:center; color:#999;">目前尚無足夠數據進行分析</td></tr>' : ''}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            `;
+
+        } catch (e) {
+            console.error("Dashboard render failed", e);
+            workspace.innerHTML = `<p style="color:red;">載入失敗: ${e.message}</p>`;
+        }
     }
 
     async function renderUserManagement() {
@@ -2978,6 +3262,8 @@ function renderAdmin() {
 
     if (state.adminViewMode === 'users') {
         setTimeout(renderUserManagement, 0);
+    } else if (state.adminViewMode === 'behavior') {
+        setTimeout(renderBehavioralDashboard, 0);
     } else {
         setTimeout(renderCourseList, 0);
     }

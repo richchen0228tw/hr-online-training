@@ -3,7 +3,7 @@
  * Tracks user interactions and video playback events for behavioral interest analysis.
  * Adheres to the LMS User Behavioral Event Schema.
  */
-class BehavioralTracker {
+export class BehavioralTracker {
     constructor(config) {
         this.sessionId = config.sessionId || crypto.randomUUID();
         this.userId = config.userId || 'anonymous';

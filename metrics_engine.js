@@ -2,7 +2,7 @@
  * MetricsEngine
  * Calculates composite metrics (TES, Seek-back Rate) based on the event stream.
  */
-class MetricsEngine {
+export class MetricsEngine {
     constructor() {
         this.metrics = {
             seekBackCount: 0,
