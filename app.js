@@ -518,8 +518,7 @@ function createNavbar(showAdminBtn = false, enableLogoLink = false) {
     const nav = document.createElement('nav');
     nav.className = 'navbar';
 
-
-    // Logo Logic: 總是顯示為連結，並使用 CSS 定義的顏色
+    // Logo Logic
     const logoHtml = `
         <a href="#home" style="display: flex; align-items: center; text-decoration: none; color: inherit;">
             <img src="images/logo.png" alt="MiTAC Logo" style="height: 40px; width: auto; margin-right: 10px;">
@@ -535,22 +534,27 @@ function createNavbar(showAdminBtn = false, enableLogoLink = false) {
         ? '<a href="#progress" class="btn" style="background:transparent; color: var(--primary-color); border: 1px solid var(--primary-color); margin-right: 0.5rem;">我的學習紀錄</a>'
         : '';
 
-    // 管理員按鈕：只在管理員登入狀態下顯示（因為登入頁已有連結，且一般登入不需要看到）
     const adminBtnHtml = state.adminLoggedIn
         ? '<a href="#admin" class="btn" style="background:transparent; color: var(--primary-color); border: 1px solid var(--primary-color); margin-right: 0.5rem;">管理員後台</a>'
         : '';
 
-    // 登出按鈕：只要有登入就顯示
-    // 登出按鈕：只要有登入就顯示 (一般使用者或管理員)
     const logoutBtnHtml = (state.currentUser || state.adminLoggedIn)
         ? `<button id="btn-logout" class="btn" style="background:#f44336; color: white; border: none; padding: 0.5rem 1rem;">登出</button>`
         : '';
+
+    // Mobile Hamburger Button
+    const mobileMenuBtn = `
+        <button class="mobile-menu-btn" aria-label="Toggle Menu">
+            ☰
+        </button>
+    `;
 
     nav.innerHTML = `
         <div class="logo">
             ${logoHtml}
         </div>
-        <div class="nav-links" style="display: flex; align-items: center;">
+        ${mobileMenuBtn}
+        <div class="nav-links" id="nav-links">
             ${userInfo}
             ${progressBtnHtml}
             ${adminBtnHtml}
@@ -558,19 +562,35 @@ function createNavbar(showAdminBtn = false, enableLogoLink = false) {
         </div>
     `;
 
-    // Bind Logout Event
+    // Bind Mobile Menu Toggle
     setTimeout(() => {
+        const toggleBtn = nav.querySelector('.mobile-menu-btn');
+        const navLinks = nav.querySelector('#nav-links');
+
+        if (toggleBtn && navLinks) {
+            toggleBtn.onclick = () => {
+                navLinks.classList.toggle('active');
+            };
+        }
+
+        // Close menu when a link is clicked
+        const links = navLinks.querySelectorAll('a, button');
+        links.forEach(link => {
+            link.addEventListener('click', () => {
+                navLinks.classList.remove('active');
+            });
+        });
+
+        // Logout Logic
         const logoutBtn = nav.querySelector('#btn-logout');
         if (logoutBtn) {
             logoutBtn.onclick = () => {
                 if (confirm('確定要登出嗎？')) {
-                    // Prevent flash of content by setting loading and clearing state
                     state.loading = true;
                     state.currentUser = null;
                     state.adminLoggedIn = false;
-
                     sessionStorage.removeItem('hr_training_user');
-                    window.location.hash = '#home'; // Force redirect to home
+                    window.location.hash = '#home';
                     window.location.reload();
                 }
             };
@@ -1882,25 +1902,25 @@ function renderAdmin() {
             currentSort === 'actualDate' ? '實際課程日期' : '上架狀態';
 
         const header = document.createElement('div');
-        header.className = 'flex justify-between items-center mb-4';
+        header.className = 'flex justify-between items-center mb-4 admin-header';
         header.innerHTML = `
-            <div class="flex items-center gap-4">
-                <h2 style="margin:0;">課程列表</h2>
-                <div style="font-size: 0.9rem;">
-                    排序依據: 
-                    <select id="sort-select" style="padding: 4px; border-radius: 4px; border: 1px solid #ddd;">
-                        <option value="openDate" ${currentSort === 'openDate' ? 'selected' : ''}>線上開放日期</option>
-                        <option value="actualDate" ${currentSort === 'actualDate' ? 'selected' : ''}>實際課程日期</option>
-                        <option value="status" ${currentSort === 'status' ? 'selected' : ''}>上架狀態</option>
-                    </select>
-                </div>
+        <div class="flex items-center gap-4 admin-title-group">
+            <h2 style="margin:0; white-space: nowrap;">課程列表</h2>
+            <div class="admin-sort-controls">
+                <span class="sort-label">排序:</span>
+                <select id="sort-select" class="sort-select">
+                    <option value="openDate" ${currentSort === 'openDate' ? 'selected' : ''}>線上開放日期</option>
+                    <option value="actualDate" ${currentSort === 'actualDate' ? 'selected' : ''}>實際課程日期</option>
+                    <option value="status" ${currentSort === 'status' ? 'selected' : ''}>上架狀態</option>
+                </select>
             </div>
-            <div class="flex gap-2">
-                 <button class="btn" id="btn-batch-delete" style="background-color: #dc3545; display: none;">🗑️ 刪除所選課程</button>
-                <button class="btn" id="btn-export-progress" style="background-color: #28a745;">📊 匯出課程紀錄</button>
-                <button class="btn" id="btn-add-course">+ 新增課程</button>
-            </div>
-        `;
+        </div>
+        <div class="flex gap-2 admin-actions">
+             <button class="btn" id="btn-batch-delete" style="background-color: #dc3545; display: none;">🗑️ 刪除</button>
+            <button class="btn" id="btn-export-progress" style="background-color: #28a745;">📊 匯出紀錄</button>
+            <button class="btn" id="btn-add-course">+ 新增課程</button>
+        </div>
+    `;
         card.appendChild(header);
 
         // Batch Delete Logic
@@ -2343,15 +2363,14 @@ function renderAdmin() {
                                     <td style="padding: 1rem;">
                                         <input type="checkbox" class="user-checkbox" value="${u.userId}" style="cursor: pointer; transform: scale(1.3);">
                                     </td>
-                                    <td style="padding: 1rem;">${u.userId}</td>
-                                    <td style="padding: 1rem;">${u.userName}</td>
-                                    <td style="padding: 1rem;">${u.email || '-'}</td>
-                                    <td style="padding: 1rem;">${u.courses.length}</td>
-                                    <td style="padding: 1rem; color: #666;">${u.lastActive ? new Date(u.lastActive).toLocaleString('zh-TW') : '-'}</td>
-                                    <td style="padding: 1rem; display: flex; gap: 0.5rem;">
+                                    <td style="padding: 1rem;" data-label="員工編號">${u.userId}</td>
+                                    <td style="padding: 1rem;" data-label="姓名">${u.userName}</td>
+                                    <td style="padding: 1rem;" data-label="Email">${u.email || '-'}</td>
+                                    <td style="padding: 1rem;" data-label="參與課程數">${u.courses.length}</td>
+                                    <td style="padding: 1rem; color: #666;" data-label="最後活動時間">${u.lastActive ? new Date(u.lastActive).toLocaleString('zh-TW') : '-'}</td>
+                                    <td style="padding: 1rem; display: flex; gap: 0.5rem;" data-label="功能">
                                         <button class="btn view-user-progress-btn" data-userid="${u.userId}" style="padding: 4px 12px; font-size: 0.85rem; background:#17a2b8; color:white;">學習紀錄</button>
-                                        <button class="btn edit-user-btn" data-userid="${u.userId}" style="padding: 4px 12px; font-size: 0.85rem;">編輯</button>
-                                        <button class="btn delete-user-btn" data-userid="${u.userId}" data-username="${u.userName}" style="padding: 4px 12px; font-size: 0.85rem; background-color: #dc3545; color: white;">刪除</button>
+                                        <button class="btn edit-user-btn" data-userid="${u.userId}" style="padding: 4px 12px; font-size: 0.85rem; background:#ffc107; color:black;">編輯</button>
                                     </td>
                                 </tr>
                             `).join('')}
