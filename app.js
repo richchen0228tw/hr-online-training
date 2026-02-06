@@ -3568,10 +3568,9 @@ function renderAdmin() {
 // ============== V5: ARCHIVES VIEW ==============
 async function renderArchivesView() {
     const workspace = document.querySelector('#admin-workspace');
-    workspace.innerHTML = '<p style="text-align:center;">頛銝?..</p>';
+    workspace.innerHTML = '<p style="text-align:center;">載入中...</p>';
 
     try {
-        // ?亥岷??歇撠??飛??
         const q = query(collection(db, "users"), where("status", "==", "archived"));
         const snapshot = await getDocs(q);
         const archivedUsers = [];
@@ -3579,70 +3578,67 @@ async function renderArchivesView() {
 
         workspace.innerHTML = `
             <div style="background:white; padding:2rem; border-radius:8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
-                <h2 style="margin-bottom: 1.5rem; color: var(--primary-color);">? 甇瑕撠?摨?/h2>
-                <p style="color: #666; margin-bottom: 2rem;">??${archivedUsers.length} 蝑?摮???/p>
+                <h2 style="margin-bottom: 1.5rem; color: var(--primary-color);">📦 歷史封存庫</h2>
+                <p style="color: #666; margin-bottom: 2rem;">共 ${archivedUsers.length} 筆封存紀錄</p>
                 
                 <table class="full-width" style="border-collapse: collapse;">
                     <thead>
                         <tr style="background: #f8f9fa; text-align:left; border-bottom:2px solid #dee2e6;">
-                            <th style="padding:12px;">憪?</th>
+                            <th style="padding:12px;">姓名</th>
                             <th style="padding:12px;">Email</th>
-                            <th style="padding:12px;">?∪極蝺刻?</th>
-                            <th style="padding:12px;">撠???</th>
-                            <th style="padding:12px;">撠??交?</th>
-                            <th style="padding:12px;">??</th>
+                            <th style="padding:12px;">員工編號</th>
+                            <th style="padding:12px;">封存原因</th>
+                            <th style="padding:12px;">封存日期</th>
+                            <th style="padding:12px;">操作</th>
                         </tr>
                     </thead>
                     <tbody>
                         ${archivedUsers.length === 0 ?
-                '<tr><td colspan="6" style="text-align:center; padding:3rem; color:#999;">?怎撠?閮?</td></tr>' :
+                '<tr><td colspan="6" style="text-align:center; padding:3rem; color:#999;">暫無封存記錄</td></tr>' :
                 archivedUsers.map(u => `
                                 <tr style="border-bottom:1px solid #eee;">
                                     <td style="padding:12px;">${u.userName || '-'}</td>
                                     <td style="padding:12px;"><small>${u.email || '-'}</small></td>
-                                    <td style="padding:12px;">${u.employeeId || '?芰?摰?}</td>
-                    < td style = "padding:12px;" >
-                    ${
-                        u.archivedReason === 'merged' ?
-                            '<span style="color:#9c27b0;">?? 撌脣?雿?/span>' :
-                            '<span style="color:#f44336;">??儭?撌脣??/span>'
-                }
-                                    </td >
+                                    <td style="padding:12px;">${u.employeeId || '未綁定'}</td>
+                                    <td style="padding:12px;">
+                                        ${u.archivedReason === 'merged' ?
+                        '<span style="color:#9c27b0;">🔗 已合併</span>' :
+                        '<span style="color:#f44336;">🗑️ 已刪除</span>'}
+                                    </td>
                                     <td style="padding:12px;"><small>${u.archivedAt ? new Date(u.archivedAt).toLocaleString('zh-TW') : '-'}</small></td>
                                     <td style="padding:12px;">
                                         ${u.archivedReason === 'merged' && u.mergedTarget ?
-                        `<small style="color:#666;">??${u.mergedTarget.substring(0, 8)}...</small>` :
-                        '<button class="btn-sm" style="background:#4caf50; color:white;" data-uid="${u.uid}" data-name="${u.userName}" onclick="restoreUser(this)">敺拙?</button>'}
+                        `<small style="color:#666;">→ ${u.mergedTarget.substring(0, 8)}...</small>` :
+                        `<button class="btn-sm" style="background:#4caf50; color:white;" data-uid="${u.uid}" data-name="${u.userName}" onclick="window.restoreArchivedUser(this)">復原</button>`}
                                     </td>
-                                </tr >
-                    `).join('')
+                                </tr>
+                            `).join('')
             }
                     </tbody>
                 </table>
             </div>
         `;
 
-        // 蝬?敺拙??? (憒??閬?
-        window.restoreUser = async function (btn) {
+        window.restoreArchivedUser = async function (btn) {
             const uid = btn.getAttribute('data-uid');
             const name = btn.getAttribute('data-name');
 
-            if (confirm(`蝣箏?閬儔?飛?～?{name}??嚗)) {
+            if (confirm(`確定要復原學員「${name}」嗎？`)) {
                 try {
                     await updateDoc(doc(db, "users", uid), {
                         status: 'active',
                         restoredAt: new Date().toISOString()
                     });
-                    alert('敺拙???嚗?);
-                    renderArchivesView(); // ?頛
+                    alert('復原成功！');
+                    renderArchivesView();
                 } catch (e) {
-                    alert('敺拙?憭望?: ' + e.message);
+                    alert('復原失敗: ' + e.message);
                 }
             }
         };
 
     } catch (e) {
         console.error('[Archives] Error loading archived users:', e);
-        workspace.innerHTML = `< p style = "color:red; text-align:center;" > 頛憭望 ?: ${ e.message }</p > `;
+        workspace.innerHTML = `<p style="color:red; text-align:center;">載入失敗: ${e.message}</p>`;
     }
 }
