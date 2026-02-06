@@ -1,20 +1,54 @@
-import { db, auth, googleProvider, signInWithPopup, signOut, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, sendPasswordResetEmail } from './firebase-config.js';
-import { collection, getDocs, addDoc, updateDoc, doc, deleteDoc, query, where, setDoc, getDoc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+import {
+    db,
+    auth,
+    googleProvider,
+    signInWithPopup,
+    signOut,
+    onAuthStateChanged,
+    createUserWithEmailAndPassword,
+    signInWithEmailAndPassword,
+    sendPasswordResetEmail,
+    verifyPasswordResetCode,
+    confirmPasswordReset,
+    firebaseConfig
+} from './firebase-config.js';
+
+// Import initializeApp properly to create secondary app instances for Admin actions
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+import { getAuth } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+
+import {
+    collection,
+    getDocs,
+    doc,
+    getDoc,
+    setDoc,
+    updateDoc,
+    arrayUnion,
+    query,
+    where,
+    deleteDoc,
+    addDoc,
+    deleteField
+} from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+
 import { BehavioralTracker } from './behavioral_tracking.js';
 import { MetricsEngine } from './metrics_engine.js';
 
-// State
+// Global State
 const state = {
     currentRoute: '',
     courses: [],
-    adminLoggedIn: false,
+    currentCourse: null,
+    isAdmin: false,      // Permission Flag
+    adminLoggedIn: false, // Access Flag (Original System) - We might merge these or keep both for compatibility
     loading: true,
-    currentUser: null, // v5: { uid, userName, employeeId, email, role, status }
-    adminViewMode: 'courses', // 'courses', 'users', 'archives'
-    adminSortBy: 'openDate',   // 'openDate' or 'actualDate'
-    authInitialized: false,    // v5: Firebase Auth 初始化完成
-    useFirebaseAuth: false     // v5: 啟用 Firebase Auth (漸進式切換開關)
+    currentUser: null,   // { userId, userName, email, uid }
+    adminViewMode: 'courses', // 'courses', 'users', 'behavior'
+    adminSortBy: 'openDate'
 };
+
+const themeColor = '#0ABAB5'; // Tiffany Blue
 
 // YouTube Player Management
 let currentYouTubePlayer = null;
@@ -113,7 +147,7 @@ function handleRoute() {
     const id = hash.split('/')[1];
 
     state.currentRoute = path;
-    renderApp(path, id);
+    renderAppLegacy(path, id);
 }
 
 // Data Handling
@@ -184,389 +218,444 @@ function canUserViewCourse(course, userId) {
     return course.allowedUserIds.includes(userId);
 }
 
-// ============== V5 AUTH MANAGER ==============
-const AuthManager = {
-    init: () => {
-        onAuthStateChanged(auth, async (user) => {
-            if (user) {
-                console.log('[v5 Auth] User detected:', user.uid);
-                await AuthManager.handleUserLogin(user);
-            } else {
-                console.log('[v5 Auth] No user.');
-                if (state.useFirebaseAuth) {
-                    state.currentUser = null;
-                    state.adminLoggedIn = false;
-                    state.authInitialized = true;
-                    handleRoute();
+// ============== Auth & Init Module (V5) ==============
+
+// Initialize App
+async function initApp() {
+    // Check for Firebase Action Code (Email Links)
+    if (await checkActionCode()) return;
+
+    console.log('Initializing V5 App...');
+
+    // Auth Listener
+    onAuthStateChanged(auth, async (user) => {
+        if (user) {
+            console.log('User detected:', user.uid);
+
+            // Check if user has Employee ID bound
+            try {
+                const userDoc = await getDoc(doc(db, "users", user.uid));
+
+                if (userDoc.exists() && userDoc.data().userId) {
+                    // Check Archived Status (Soft Delete)
+                    if (userDoc.data().status === 'archived') {
+                        alert("此帳號已被停用或合併封存，無法登入。");
+                        await signOut(auth);
+                        window.location.reload();
+                        return;
+                    }
+
+                    // User valid and bound
+                    state.currentUser = { ...userDoc.data(), uid: user.uid }; // Use userId from DB
+
+                    if (state.currentUser.email === 'admin' || state.currentUser.isAdmin) {
+                        state.isAdmin = true;
+                    }
+
+                    await fetchCourses();
+                    renderAppV5();
+                } else {
+                    // User logged in but NO Employee ID (New Google User or Old Legacy)
+                    console.log('User missing Employee ID, prompting bind...');
+                    renderBindIdModal(user);
                 }
+            } catch (e) {
+                console.error("Error fetching user profile:", e);
+                // Fallback or Retry?
+                // For now, allow retry by reloading or try fetching again
+                document.body.innerHTML = `<div style="color:white; text-align:center; padding-top:20%;"><h3>載入使用者資料失敗</h3><p>${e.message}</p><button onclick="location.reload()">重試</button></div>`;
             }
-        });
-    },
-
-    handleUserLogin: async (firebaseUser) => {
-        if (!state.useFirebaseAuth) return; // 若未啟用 v5，跳過
-
-        try {
-            state.loading = true;
-            const userRef = doc(db, "users", firebaseUser.uid);
-            const userSnap = await getDoc(userRef);
-
-            let userData = null;
-
-            if (userSnap.exists()) {
-                userData = userSnap.data();
-
-                // ✨ 檢查是否已封存
-                if (userData.status === 'archived') {
-                    const reason = userData.archivedReason === 'merged'
-                        ? '此帳號已被合併至其他帳號'
-                        : '此帳號已被停用';
-                    alert(reason + '。如有疑問請聯絡管理員。');
-                    await signOut(auth);
-                    state.loading = false;
-                    return;
-                }
-            } else {
-                // 新使用者首次登入
-                userData = {
-                    email: firebaseUser.email,
-                    userName: firebaseUser.displayName || '',
-                    photoURL: firebaseUser.photoURL || '',
-                    createdAt: new Date().toISOString(),
-                    status: 'active',
-                    role: 'user',
-                    employeeId: '' // 尚未綁定
-                };
-                await setDoc(userRef, userData);
-            }
-
-            // 更新 State
-            state.currentUser = { uid: firebaseUser.uid, ...userData };
-
-            // 檢查管理員權限
-            if (userData.role === 'admin') {
-                state.adminLoggedIn = true;
-            }
-
-            state.authInitialized = true;
-            state.loading = false;
-
-            // ✨ 檢查是否需要強制綁定編號
-            if (!userData.employeeId) {
-                console.log('[v5 Auth] No Employee ID, triggering binding...');
-                AuthManager.showMandatoryBindingModal(firebaseUser.uid);
-            } else {
-                await fetchCourses();
-                handleRoute();
-            }
-
-        } catch (e) {
-            console.error('[v5 Auth] Login handling error:', e);
-            state.loading = false;
-            alert('登入處理發生錯誤: ' + e.message);
+        } else {
+            console.log('No user, showing login.');
+            state.currentUser = null;
+            state.adminLoggedIn = false;
+            state.isAdmin = false;
+            renderLogin();
         }
-    },
+    });
 
-    loginWithGoogle: async () => {
+    // Handle Hash Navigation
+    window.addEventListener('hashchange', () => {
+        renderAppV5();
+    });
+}
+
+// Render Login (Gamma Style)
+function renderLogin() {
+    const app = document.getElementById('app');
+    // Using inline styles for simplicity as requested, but keeping it clean
+    app.innerHTML = `
+        <div style="
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #000;
+            color: #fff;
+            font-family: 'Inter', sans-serif;
+            position: relative;
+            overflow: hidden;
+        ">
+            <!-- Background Gradient -->
+            <div style="
+                position: absolute;
+                top: -20%;
+                left: -10%;
+                width: 60%;
+                height: 60%;
+                background: radial-gradient(circle, rgba(10, 186, 181, 0.2) 0%, rgba(0,0,0,0) 70%);
+                filter: blur(80px);
+                z-index: 0;
+            "></div>
+
+            <div style="
+                position: relative;
+                z-index: 10;
+                width: 100%;
+                max-width: 420px;
+                padding: 2rem;
+            ">
+                <div class="glass-card" style="
+                    background: rgba(255, 255, 255, 0.03);
+                    backdrop-filter: blur(20px);
+                    border: 1px solid rgba(255, 255, 255, 0.1);
+                    border-radius: 20px;
+                    padding: 3rem 2rem;
+                    text-align: center;
+                    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+                ">
+                    <!-- Header -->
+                    <h1 style="
+                        font-family: 'Outfit', sans-serif;
+                        font-weight: 700;
+                        font-size: 2rem;
+                        margin-bottom: 0.5rem;
+                        background: linear-gradient(135deg, #fff 0%, #ccc 100%);
+                        -webkit-background-clip: text;
+                        -webkit-text-fill-color: transparent;
+                    ">
+                        MiTAC 線上學習
+                    </h1>
+                    <p style="color: #888; margin-bottom: 2.5rem; font-size: 0.95rem;">
+                        HR Online Training System
+                    </p>
+
+                    <!-- Google Login -->
+                    <button id="btn-google-login" style="
+                        width: 100%;
+                        background: #fff;
+                        color: #000;
+                        border: none;
+                        padding: 12px;
+                        border-radius: 12px;
+                        font-weight: 600;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        gap: 10px;
+                        cursor: pointer;
+                        margin-bottom: 1.5rem;
+                        transition: transform 0.2s, background 0.2s;
+                    " onmouseover="this.style.transform='scale(1.02)'" onmouseout="this.style.transform='scale(1)'">
+                        <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" width="20" height="20">
+                        使用 Google 帳號登入
+                    </button>
+                    
+                    <div style="display: flex; align-items: center; gap: 1rem; margin: 1.5rem 0; color: #555;">
+                        <div style="flex:1; height:1px; background:#333;"></div>
+                        <span style="font-size: 0.8rem;">或使用 Email</span>
+                        <div style="flex:1; height:1px; background:#333;"></div>
+                    </div>
+
+                    <!-- Email Login -->
+                    <div style="text-align: left; margin-bottom: 1rem;">
+                        <input type="email" id="login-email" placeholder="Email" style="
+                            width: 100%;
+                            padding: 12px 16px;
+                            background: rgba(0,0,0,0.3);
+                            border: 1px solid #333;
+                            border-radius: 10px;
+                            color: #fff;
+                            margin-bottom: 0.8rem;
+                            outline: none;
+                            transition: border-color 0.3s;
+                        " onfocus="this.style.borderColor='#0ABAB5'" onblur="this.style.borderColor='#333'">
+                        
+                        <div style="position: relative;">
+                            <input type="password" id="login-password" placeholder="密碼" style="
+                                width: 100%;
+                                padding: 12px 16px;
+                                background: rgba(0,0,0,0.3);
+                                border: 1px solid #333;
+                                border-radius: 10px;
+                                color: #fff;
+                                outline: none;
+                                transition: border-color 0.3s;
+                            " onfocus="this.style.borderColor='#0ABAB5'" onblur="this.style.borderColor='#333'">
+                            <span id="toggle-pwd" style="
+                                position: absolute;
+                                right: 12px;
+                                top: 50%;
+                                transform: translateY(-50%);
+                                cursor: pointer;
+                                color: #666;
+                                font-size: 1.2rem;
+                            ">👁️</span>
+                        </div>
+                    </div>
+
+                    <button id="btn-email-login" style="
+                        width: 100%;
+                        background: linear-gradient(135deg, #0ABAB5 0%, #008f8a 100%);
+                        color: #fff;
+                        border: none;
+                        padding: 12px;
+                        border-radius: 12px;
+                        font-weight: 600;
+                        cursor: pointer;
+                        margin-bottom: 1rem;
+                        transition: opacity 0.2s;
+                    ">登入</button>
+                    
+                     <div style="display: flex; justify-content: space-between; font-size: 0.85rem;">
+                        <a href="#" id="link-forgot-pw" style="color: #666; text-decoration: none;">忘記密碼?</a>
+                        <a href="#admin-login" id="link-admin" style="color: #666; text-decoration: none;">管理員登入</a>
+                    </div>
+
+                    <div id="login-msg" style="
+                        margin-top: 1rem; 
+                        color: #ff6b6b; 
+                        font-size: 0.9rem; 
+                        min-height: 1.2em;
+                    "></div>
+                </div>
+            </div>
+        </div>
+    `;
+
+    // Events
+
+    // Toggle Password
+    const pwdInput = document.getElementById('login-password');
+    const toggleBtn = document.getElementById('toggle-pwd');
+    toggleBtn.onclick = () => {
+        if (pwdInput.type === 'password') {
+            pwdInput.type = 'text';
+            toggleBtn.style.color = '#fff';
+        } else {
+            pwdInput.type = 'password';
+            toggleBtn.style.color = '#666';
+        }
+    };
+
+    // Google Login
+    document.getElementById('btn-google-login').onclick = async () => {
         try {
             await signInWithPopup(auth, googleProvider);
         } catch (error) {
             console.error(error);
-            if (error.code === 'auth/account-exists-with-different-credential') {
-                alert('此 Email 已使用其他方式（如密碼）登入過，請使用該方式登入。');
-            } else {
-                alert('Google 登入失敗: ' + error.message);
-            }
+            document.getElementById('login-msg').textContent = "Google 登入失敗: " + error.message;
         }
-    },
+    };
 
-    loginWithEmail: async (email, password) => {
+    // Email Login
+    document.getElementById('btn-email-login').onclick = async () => {
+        const e = document.getElementById('login-email').value;
+        const p = document.getElementById('login-password').value;
+        if (!e || !p) {
+            document.getElementById('login-msg').textContent = "請輸入 Email 與密碼";
+            return;
+        }
         try {
-            await signInWithEmailAndPassword(auth, email, password);
-        } catch (error) {
-            console.error(error);
-            alert('登入失敗: ' + error.message);
+            await signInWithEmailAndPassword(auth, e, p);
+        } catch (err) {
+            let msg = "登入失敗";
+            if (err.code === 'auth/invalid-credential') msg = "帳號或密碼錯誤";
+            if (err.code === 'auth/invalid-email') msg = "Email 格式錯誤";
+            document.getElementById('login-msg').textContent = msg;
+            console.error(err);
         }
-    },
+    };
 
-    resetPassword: async (email) => {
-        try {
-            await sendPasswordResetEmail(auth, email);
-            alert(`已發送重設密碼信至 ${email}，請查收信件並設定新密碼。`);
-        } catch (e) {
-            console.error(e);
-            alert('發送失敗: ' + e.message);
-        }
-    },
-
-    // ✨ 管理員邀請學員 (使用 Secondary App)
-    createUserAsAdmin: async (email, name) => {
-        const secondaryApp = window.secondaryFirebaseApp ||
-            (await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js")).initializeApp({
-                apiKey: "AIzaSyBwQ8SNvJ_VcLkN9Bx7bop8OYU4fnRlpbM",
-                authDomain: "hr-online-training.firebaseapp.com",
-                projectId: "hr-online-training",
-            }, "SecondaryApp");
-        window.secondaryFirebaseApp = secondaryApp;
-
-        const secondaryAuth = (await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js")).getAuth(secondaryApp);
-
-        try {
-            const tempPassword = Math.random().toString(36).slice(-8) + "Aa1!";
-            const userCred = await (await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js")).createUserWithEmailAndPassword(secondaryAuth, email, tempPassword);
-            const uid = userCred.user.uid;
-
-            await (await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js")).sendPasswordResetEmail(secondaryAuth, email);
-
-            await setDoc(doc(db, "users", uid), {
-                email: email,
-                userName: name,
-                createdAt: new Date().toISOString(),
-                status: 'active',
-                role: 'user',
-                employeeId: ''
-            });
-
-            await (await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js")).signOut(secondaryAuth);
-
-            return true;
-        } catch (e) {
-            console.error("[v5 Admin] Invite Error", e);
-            throw e;
-        }
-    },
-
-    // ✨ 強制綁定 Modal (自動大寫)
-    showMandatoryBindingModal: (uid) => {
-        const modal = document.createElement('div');
-        modal.className = 'user-dialog-overlay';
-        modal.style.zIndex = '10000';
-        modal.innerHTML = `
-            <div class="mandatory-modal">
-                <h2 style="color: var(--primary-color); margin-bottom: 1rem;">初次登入設定</h2>
-                <p style="margin-bottom: 2rem; color: #666;">為了確保學習權益，請綁定您的員工資訊。</p>
-                
-                <div class="input-group">
-                    <label class="input-label">真實姓名</label>
-                    <input type="text" id="bind-name" class="input-field" placeholder="請輸入姓名" value="${state.currentUser?.userName || ''}">
-                </div>
-                
-                <div class="input-group">
-                    <label class="input-label">員工編號 (將自動轉為大寫)</label>
-                    <input type="text" id="bind-id" class="input-field" placeholder="例如: A1234">
-                </div>
-
-                <div id="bind-error" style="color: #ef4444; margin-bottom: 1rem; display: none;"></div>
-
-                <button id="btn-bind-submit" class="btn-submit" style="background: var(--primary-color); color: white;">確認綁定</button>
-            </div>
-        `;
-        document.body.appendChild(modal);
-
-        const btn = modal.querySelector('#btn-bind-submit');
-        const idInput = modal.querySelector('#bind-id');
-        const nameInput = modal.querySelector('#bind-name');
-        const err = modal.querySelector('#bind-error');
-
-        btn.onclick = async () => {
-            const rawId = idInput.value.trim().toUpperCase(); // ✨ 自動大寫
-            const name = nameInput.value.trim();
-
-            if (!rawId || !name) {
-                err.textContent = '請填寫所有欄位';
-                err.style.display = 'block';
-                return;
-            }
-
+    // Forgot Password
+    document.getElementById('link-forgot-pw').onclick = async (e) => {
+        e.preventDefault();
+        const email = prompt("請輸入您的 Email 以重設密碼:");
+        if (email) {
             try {
-                btn.disabled = true;
-                btn.textContent = '處理中...';
-
-                await updateDoc(doc(db, "users", uid), {
-                    employeeId: rawId,
-                    userName: name,
-                    updatedAt: new Date().toISOString()
-                });
-
-                state.currentUser.employeeId = rawId;
-                state.currentUser.userName = name;
-
-                document.body.removeChild(modal);
-                await fetchCourses();
-                handleRoute();
-
-            } catch (e) {
-                console.error(e);
-                err.textContent = '綁定失敗: ' + e.message;
-                err.style.display = 'block';
-                btn.disabled = false;
-                btn.textContent = '確認綁定';
+                const actionCodeSettings = {
+                    url: 'https://hr-online-training.firebaseapp.com/?mode=resetPassword',
+                    handleCodeInApp: false
+                };
+                await sendPasswordResetEmail(auth, email, actionCodeSettings);
+                alert("已發送重設密碼信，請檢查您的信箱\n\n重要：請確認連結透過瀏覽器開啟，而非郵件預覽模式。");
+            } catch (err) {
+                alert("發送失敗: " + err.message);
             }
         }
-    }
-};
+    };
 
-// ============== 使用者識別模組 ==============
-function initializeUser() {
-    // 檢查 sessionStorage (Browser Session) 是否已有使用者資訊
-    const stored = sessionStorage.getItem('hr_training_user');
-    const storedAdmin = sessionStorage.getItem('localAdminUser'); // Check for admin session
-
-    if (storedAdmin) {
-        state.adminLoggedIn = true;
-        state.isAdmin = true;
-        return true; // Skip user dialog if admin matches
-    }
-
-    if (stored) {
-        try {
-            state.currentUser = JSON.parse(stored);
-            return true;
-        } catch (e) {
-            console.error('解析使用者資訊失敗', e);
-        }
-    }
-
-    // 顯示使用者資訊輸入對話框
-    return showUserDialog();
+    // Switch to Admin Login (Internal Logic)
+    document.getElementById('link-admin').onclick = (e) => {
+        e.preventDefault();
+        renderAdminLogin();
+    };
 }
 
-function showUserDialog() {
-    return new Promise((resolve) => {
-        const overlay = document.createElement('div');
-        overlay.className = 'user-dialog-overlay';
-        overlay.innerHTML = `
-            <div class="user-dialog">
-                <h2 style="margin-bottom: 1.5rem; color: var(--primary-color);">歡迎使用線上學習平台</h2>
-                <p style="margin-bottom: 2rem; color: #666;">請輸入您的資訊以開始學習</p>
-                <div class="form-group">
-                    <label>員工編號 (4碼) *</label>
-                    <input type="text" id="user-id" placeholder="0000" required />
-                </div>
-                <div class="form-group">
-                    <label>中文姓名 *</label>
-                    <input type="text" id="user-name" placeholder="請輸入您的姓名" required />
-                </div>
-                 <div class="form-group">
-                    <label>Email * (公司email)</label>
-                    <input type="email" id="user-email" placeholder="example@mitac.com.tw" required />
-                </div>
-                <p id="user-error" style="color: #ff6b6b; font-size: 0.9rem; margin-top: 1rem; display: none;">請填寫所有欄位</p>
-                <button class="btn full-width" id="btn-user-submit" style="margin-top: 1.5rem;">開始學習 / 註冊</button>
-                <div style="text-align: center; margin-top: 15px;">
-                    <a href="#" id="admin-login-link" style="font-size: 0.85rem; color: #aaa; text-decoration: none;">管理員後台</a>
-                </div>
+// Render Bind ID Modal
+function renderBindIdModal(user) {
+    const app = document.getElementById('app');
+    app.innerHTML = `
+        <div style="
+            height: 100vh;
+            display: flex; 
+            align-items: center; 
+            justify-content: center; 
+            background: #f0f2f5;
+        ">
+            <div style="
+                background: white; 
+                padding: 2.5rem; 
+                border-radius: 12px; 
+                box-shadow: 0 10px 30px rgba(0,0,0,0.1); 
+                max-width: 400px; 
+                width: 90%; 
+                text-align: center;
+            ">
+                <h2 style="margin-bottom: 1rem; color: #333;">👋 歡迎加入</h2>
+                <p style="color: #666; margin-bottom: 2rem;">
+                    這是您第一次登入，請輸入您的員工編號以完成綁定。<br>
+                    <span style="font-size:0.85rem; color:#888;">(此操作只需執行一次)</span>
+                </p>
+                
+                <input type="text" id="bind-id-input" placeholder="例如: EMP001" style="
+                    width: 100%; 
+                    padding: 12px; 
+                    border: 2px solid #eee; 
+                    border-radius: 8px; 
+                    font-size: 1rem; 
+                    margin-bottom: 1rem;
+                    text-transform: uppercase;
+                " oninput="this.value = this.value.toUpperCase()">
+
+                <button id="btn-bind-confirm" style="
+                    width: 100%; 
+                    padding: 12px; 
+                    background: #0ABAB5; 
+                    color: white; 
+                    border: none; 
+                    border-radius: 8px; 
+                    font-size: 1rem; 
+                    cursor: pointer;
+                    font-weight: bold;
+                ">確認綁定</button>
+
+                <div id="bind-msg" style="color: red; margin-top: 1rem; font-size: 0.9rem;"></div>
             </div>
-        `;
-        document.body.appendChild(overlay);
+        </div>
+    `;
 
-        const submitBtn = overlay.querySelector('#btn-user-submit');
-        const userIdInput = overlay.querySelector('#user-id');
-        const userNameInput = overlay.querySelector('#user-name');
-        const userEmailInput = overlay.querySelector('#user-email');
-        const errorMsg = overlay.querySelector('#user-error');
+    document.getElementById('btn-bind-confirm').onclick = async () => {
+        const input = document.getElementById('bind-id-input');
+        const msg = document.getElementById('bind-msg');
+        const btn = document.getElementById('btn-bind-confirm');
 
-        const submit = async () => {
-            const rawId = userIdInput.value.trim();
-            const rawEmail = userEmailInput.value.trim();
-            const userName = userNameInput.value.trim();
+        const empId = input.value.trim().toUpperCase();
 
-            if (!rawId || !userName || !rawEmail) {
-                errorMsg.textContent = '請填寫所有欄位';
-                errorMsg.style.display = 'block';
-                return;
-            }
+        if (!empId) {
+            msg.textContent = "請輸入員工編號";
+            return;
+        }
 
-            // Normalization
-            const userId = rawId.toUpperCase();
-            const email = rawEmail.toLowerCase();
+        btn.disabled = true;
+        btn.textContent = "綁定中...";
 
-            // Simple Email Regex
-            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-            if (!emailRegex.test(email)) {
-                errorMsg.textContent = '請輸入有效的 Email 格式';
-                errorMsg.style.display = 'block';
-                return;
-            }
+        try {
+            // 1. Check if ID already exists
+            const q = query(collection(db, "users"), where("userId", "==", empId));
+            const snap = await getDocs(q);
 
-            submitBtn.disabled = true;
-            submitBtn.textContent = '驗證中...';
+            if (!snap.empty) {
+                // ID Taken
+                msg.innerHTML = '<div style="margin-bottom:8px">此員工編號已被其他帳號使用，請聯繫管理員。</div>';
 
-            try {
-                // Check if user exists in Firestore
-                const userRef = doc(db, "users", userId);
-                const userSnap = await getDoc(userRef);
-
-                if (userSnap.exists()) {
-                    // User exists, check email
-                    const userData = userSnap.data();
-                    if (userData.email && userData.email.toLowerCase() === email) {
-                        // Login Success
-                        // Using userName from DB if you prefer consistency, or update it? 
-                        // Let's use the DB name to be safe, or allow update? 
-                        // Request says "compare", usually implies strict check.
-                        finishLogin({ userId, userName: userData.userName, email });
-                    } else {
-                        // Mismatch
-                        errorMsg.textContent = '登入失敗：員工編號已存在，但 Email 不符。';
-                        errorMsg.style.display = 'block';
-                        submitBtn.disabled = false;
-                        submitBtn.textContent = '開始學習 / 註冊';
+                const backBtn = document.createElement('button');
+                backBtn.textContent = "返回登入";
+                backBtn.style.cssText = "background: #7f8c8d; color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 0.9rem; margin-top: 5px;";
+                backBtn.onclick = async () => {
+                    btn.disabled = true;
+                    btn.textContent = "登出中...";
+                    try {
+                        await signOut(auth);
+                        location.reload();
+                    } catch (e) {
+                        console.error(e);
+                        location.reload();
                     }
-                } else {
-                    // User does not exist -> Register
-                    const newUser = {
-                        userId,
-                        userName,
-                        email,
-                        createdAt: new Date().toISOString()
-                    };
-                    await setDoc(userRef, newUser);
-                    finishLogin(newUser);
-                }
-            } catch (e) {
-                console.error("Login Error", e);
-                errorMsg.textContent = '系統錯誤，請與管理員聯繫: ' + e.message;
-                errorMsg.style.display = 'block';
-                submitBtn.disabled = false;
-                submitBtn.textContent = '開始學習 / 註冊';
-            }
-        };
+                };
+                msg.appendChild(backBtn);
 
-        const finishLogin = (user) => {
-            sessionStorage.setItem('hr_training_user', JSON.stringify(user));
-            state.currentUser = user;
-            document.body.removeChild(overlay);
-            resolve(true);
-
-            // Redirect to home if on admin route to avoid confusion
-            if (window.location.hash === '#admin') {
-                window.location.hash = '#home';
+                btn.disabled = false;
+                btn.textContent = "確認綁定";
+                return;
             }
 
-            // Re-render home to respect permissions with new user
-            if (window.location.hash === '' || window.location.hash === '#home') {
-                renderHome();
-            }
-        };
+            // 2. Bind ID to current Auth User
+            await setDoc(doc(db, "users", user.uid), {
+                userId: empId,
+                userName: user.displayName || empId, // Default name
+                email: user.email,
+                createdAt: new Date().toISOString()
+            });
 
-        submitBtn.onclick = submit;
-        userIdInput.addEventListener('keyup', (e) => { if (e.key === 'Enter') userNameInput.focus(); });
-        userNameInput.addEventListener('keyup', (e) => { if (e.key === 'Enter') userEmailInput.focus(); });
-        userEmailInput.addEventListener('keyup', (e) => { if (e.key === 'Enter') submit(); });
+            // 3. Success -> Reload
+            alert("綁定成功！");
+            location.reload();
 
-        // Admin Link Handler
-        const adminLink = overlay.querySelector('#admin-login-link');
-        adminLink.onclick = (e) => {
-            e.preventDefault();
-            document.body.removeChild(overlay);
-            resolve(false); // Resolve promise to allow app initialization to continue
-            window.location.hash = '#admin';
-        };
+        } catch (e) {
+            console.error(e);
+            msg.textContent = "綁定失敗: " + e.message;
+            btn.disabled = false;
+            btn.textContent = "確認綁定";
+        }
+    };
+}
 
-        // Focus first input
-        setTimeout(() => userIdInput.focus(), 100);
-    });
+function renderAdminLogin() {
+    // Basic Admin Login reused from renderLogin style but for legacy admin account if needed
+    // Or we simply direct them to use Email Login if Admin account is migrated to Email.
+    // For now, let's just use the same Login Page but trigger Admin Mode if specific credentials are entered?
+    // Actually, V5 Plan says "Admin Login remains same" (lines 83 USER REQUEST).
+    // So distinct Admin Login is preferred.
+
+    // We can reuse renderLogin container but change content
+    const app = document.getElementById('app');
+    app.innerHTML = `
+        <div style = "height: 100vh; display: flex; align-items: center; justify-content: center; background: #333; color: white;" >
+            <div style="background: rgba(0,0,0,0.5); padding: 3rem; border-radius: 12px; text-align: center; border: 1px solid #555;">
+                <h2 style="margin-bottom: 2rem;">管理員登入</h2>
+                <input type="text" id="admin-user" placeholder="帳號" style="display:block; width: 100%; padding: 10px; margin-bottom: 1rem;">
+                    <input type="password" id="admin-pass" placeholder="密碼" style="display:block; width: 100%; padding: 10px; margin-bottom: 1rem;">
+                        <button id="btn-admin-submit" class="btn" style="width:100%; padding:10px; background:#0ABAB5; color:white;">登入</button>
+                        <button id="btn-back-login" class="btn" style="width:100%; padding:10px; background:transparent; color:#aaa; margin-top:1rem; border:none;">返回一般登入</button>
+                        <div id="admin-msg" style="color:red; margin-top:1rem;"></div>
+                    </div>
+            </div>
+    `;
+
+    document.getElementById('btn-admin-submit').onclick = () => {
+        const u = document.getElementById('admin-user').value;
+        const p = document.getElementById('admin-pass').value;
+        if (u === 'admin' && p === 'mitachr') {
+            state.adminLoggedIn = true;
+            state.isAdmin = true;
+            renderAppV5();
+        } else {
+            document.getElementById('admin-msg').textContent = "帳號或密碼錯誤";
+        }
+    };
+
+    document.getElementById('btn-back-login').onclick = () => renderLogin();
 }
 
 // ============== 進度追蹤服務 ==============
@@ -594,7 +683,7 @@ async function saveProgress(userId, courseId, courseName, unitProgress) {
         };
 
         // 使用 userId_courseId 作為文件 ID，確保每個使用者每門課程只有一筆紀錄
-        const docId = `${userId}_${courseId}`;
+        const docId = `${userId}_${courseId} `;
         await setDoc(doc(db, 'userProgress', docId), progressData, { merge: true });
 
         return true;
@@ -606,7 +695,7 @@ async function saveProgress(userId, courseId, courseName, unitProgress) {
 
 async function loadProgress(userId, courseId) {
     try {
-        const docId = `${userId}_${courseId}`;
+        const docId = `${userId}_${courseId} `;
         const progressDocRef = doc(db, 'userProgress', docId);
         const progressDoc = await getDoc(progressDocRef);
 
@@ -699,31 +788,12 @@ async function getAllProgress() {
 }
 
 // Initialization
-window.addEventListener('load', async () => {
-    window.addEventListener('hashchange', handleRoute);
+// Old Initialization Block Removed
 
-    // v5 開關：設為 true 啟用 Firebase Auth
-    // 設為 false 使用舊的簡易登入系統
-    const enableV5 = false; // ✨ 改為 true 啟用 v5
-    state.useFirebaseAuth = enableV5;
-
-    if (enableV5) {
-        console.log('[App] v5 Firebase Auth 模式啟用');
-        // 初始化 Firebase Auth
-        AuthManager.init();
-        // Auth 狀態變化會自動處理登入和載入課程
-    } else {
-        console.log('[App] 使用傳統登入模式');
-        // 先識別使用者
-        await initializeUser();
-        // 再載入課程
-        await fetchCourses();
-    }
-});
 
 // Render Functions
 // Render Functions
-async function renderApp(route, id) {
+async function renderAppLegacy(route, id) {
     const app = document.getElementById('app');
     app.innerHTML = ''; // Clear current content
 
@@ -741,15 +811,11 @@ async function renderApp(route, id) {
         return;
     }
 
-    if (route === '#home' || route === '') {
+    if (route === '#home') {
         content.appendChild(renderHome());
     } else if (route === '#course') {
-        if (id) {
-            const courseDetail = await renderCourseDetail(id);
-            content.appendChild(courseDetail);
-        } else {
-            content.appendChild(renderHome());
-        }
+        const courseDetail = await renderCourseDetail(id);
+        content.appendChild(courseDetail);
     } else if (route === '#progress') {
         const progressPage = await renderProgress();
         content.appendChild(progressPage);
@@ -766,10 +832,10 @@ function createNavbar(showAdminBtn = false, enableLogoLink = false) {
     const nav = document.createElement('nav');
     nav.className = 'navbar';
 
-    // Logo Logic - FIXED: Use local image and simple link
+    // Logo Logic
     const logoHtml = `
-            <a href="#home" id="logo-link" class="flex items-center gap-2 text-decoration-none" style="margin-right: auto; text-decoration: none; color: inherit; display: flex; align-items: center;">
-                <img src="images/logo.png" alt="MiTAC Logo" style="height: 40px; margin-right: 10px;">
+            <a href="#" id="logo-link" class="flex items-center gap-2 text-decoration-none" style="margin-right: auto;">
+                <img src="https://www.mitac.com.tw/assets/img/mitac-logo.svg" alt="MiTAC Logo" style="height: 40px;">
                 MiTAC 線上學習平台
             </a>
     `;
@@ -782,7 +848,6 @@ function createNavbar(showAdminBtn = false, enableLogoLink = false) {
         ? '<a href="#progress" class="btn" style="background:transparent; color: var(--primary-color); border: 1px solid var(--primary-color); margin-right: 0.5rem;">我的學習紀錄</a>'
         : '';
 
-    // FIXED: Always show Admin Dashboard button if logged in as admin
     const adminBtnHtml = state.adminLoggedIn
         ? '<a href="#admin" class="btn" style="background:transparent; color: var(--primary-color); border: 1px solid var(--primary-color); margin-right: 0.5rem;">管理員後台</a>'
         : '';
@@ -839,8 +904,6 @@ function createNavbar(showAdminBtn = false, enableLogoLink = false) {
                     state.currentUser = null;
                     state.adminLoggedIn = false;
                     sessionStorage.removeItem('hr_training_user');
-                    // FIXED: Clear admin session
-                    sessionStorage.removeItem('localAdminUser');
                     window.location.hash = '#home';
                     window.location.reload();
                 }
@@ -858,12 +921,13 @@ function createNavbar(showAdminBtn = false, enableLogoLink = false) {
         logoLink.onclick = (e) => {
             e.preventDefault();
             // User requested to return to "Course Home"
-            // FIXED: Do NOT turn off admin mode here. Just navigate home.
+            // If in Admin mode, we switch off admin mode
             if (state.adminLoggedIn) {
-                state.adminViewMode = 'courses'; // Reset view but keep auth
+                state.adminLoggedIn = false; // Exit admin mode
+                state.adminViewMode = 'courses'; // Reset view
             }
             window.location.hash = '#home';
-            renderAppLegacy('#home'); // Force re-render
+            renderAppV5();
         };
     }
 
@@ -872,7 +936,7 @@ function createNavbar(showAdminBtn = false, enableLogoLink = false) {
 
 function renderHome() {
     const section = document.createElement('div');
-    section.innerHTML = `<h1 style="text-align:center; margin-bottom: 3rem; margin-top: 2rem;">課程首頁</h1><p style="text-align:center; color:#666; margin-bottom:4rem;">請選擇單元進入學習</p>`;
+    section.innerHTML = `<h1 style = "text-align:center; margin-bottom: 3rem; margin-top: 2rem;" > 課程首頁</h1> <p style="text-align:center; color:#666; margin-bottom:4rem;">請選擇單元進入學習</p>`;
 
     const grid = document.createElement('div');
     grid.className = 'grid full-width';
@@ -885,7 +949,7 @@ function renderHome() {
     coursesToRender.forEach(async (course) => {
         const card = document.createElement('div');
         card.className = 'course-card';
-        card.style.borderTop = `5px solid ${course.color || '#0ABAB5'}`;
+        card.style.borderTop = `5px solid ${course.color || '#0ABAB5'} `;
 
         // 載入進度資料
         let progressHtml = '';
@@ -895,7 +959,7 @@ function renderHome() {
                 const statusText = progress.status === 'completed' ? '已完成' : '學習中';
                 const statusColor = progress.status === 'completed' ? '#4CAF50' : '#FF9800';
                 progressHtml = `
-                    <div class="progress-container" style="margin: 1rem 0;">
+        <div class="progress-container" style = "margin: 1rem 0;" >
                         <div class="progress-info" style="display: flex; justify-content: space-between; margin-bottom: 0.5rem; font-size: 0.85rem;">
                             <span style="color: ${statusColor};">⬤ ${statusText}</span>
                             <span style="color: #666;">${progress.completionRate}%</span>
@@ -904,22 +968,26 @@ function renderHome() {
                             <div class="progress-fill" style="width: ${progress.completionRate}%; background-color: ${course.color || '#0ABAB5'};"></div>
                         </div>
                     </div>
-                `;
+        `;
             }
         }
 
         card.innerHTML = `
-            <div class="course-title">${course.title}</div>
+        <div class="course-title" > ${course.title}</div>
             <div class="course-meta">${course.parts ? course.parts.length : 0} 個單元</div>
             ${progressHtml}
-            <div class="course-meta" style="font-size:0.8rem; margin-top:0.5rem; color:#888;">\r\n                線上開放: ${course.startDate || '未設定'} ~ ${course.endDate || '未設定'}\r\n                ${course.actualStartDate ? `<br>實際課程: ${course.actualStartDate} ~ ${course.actualEndDate || ''}` : ''}\r\n                ${course.courseHours ? `<br>時數: ${course.courseHours} 小時` : ''}\r\n            </div>
+            <div class="course-meta" style="font-size:0.8rem; margin-top:0.5rem; color:#888;">
+                線上開放: ${course.startDate || '未設定'} ~ ${course.endDate || '未設定'}
+                ${course.actualStartDate ? `<br>實際課程: ${course.actualStartDate} ~ ${course.actualEndDate || ''}` : ''}
+                ${course.courseHours ? `<br>時數: ${course.courseHours} 小時` : ''}
+            </div>
             <a href="#course/${course.id}" class="btn" style="background-color: ${course.color || '#0ABAB5'}">進入課程</a>
-        `;
+    `;
         grid.appendChild(card);
     });
 
     if (coursesToRender.length === 0) {
-        grid.innerHTML = `<div style="grid-column: 1/-1; text-align:center; color:#666;">目前沒有開放的課程</div>`;
+        grid.innerHTML = `<div style = "grid-column: 1/-1; text-align:center; color:#666;" > 目前沒有開放的課程</div> `;
     }
 
     section.appendChild(grid);
@@ -965,7 +1033,7 @@ async function renderCourseDetail(id) {
             const savedUnitCount = unitProgressData.length;
 
             if (currentUnitCount > savedUnitCount) {
-                console.log(`[進度同步] 課程有 ${currentUnitCount} 個單元,但進度只有 ${savedUnitCount} 筆,自動補齊`);
+                console.log(`[進度同步] 課程有 ${currentUnitCount} 個單元, 但進度只有 ${savedUnitCount} 筆, 自動補齊`);
 
                 // 補齊缺少的單元進度
                 for (let i = savedUnitCount; i < currentUnitCount; i++) {
@@ -993,20 +1061,20 @@ async function renderCourseDetail(id) {
     }
 
     div.innerHTML = `
-        <div style="max-width: 900px; margin: 0 auto; padding-bottom: 2rem;">
-            <!-- Back Button -->
+        <div style = "max-width: 900px; margin: 0 auto; padding-bottom: 2rem;" >
+            <!--Back Button-- >
             <div style="margin-bottom: 2rem;">
                  <a href="#home" class="btn" style="background-color: #6c757d; border-color: #6c757d;">&larr; 回首頁</a>
             </div>
 
-            <!-- Course Title & Nav & Progress -->
+            <!--Course Title & Nav & Progress-- >
             <div style="text-align:center; margin-bottom: 2rem;">
                 <h2 style="margin-bottom: 1rem;">${course.title}</h2>
                 <div id="course-progress-bar" style="max-width: 500px; margin: 0 auto 1.5rem auto;"></div>
                 <div id="unit-buttons-container" class="flex" style="justify-content: center; gap: 1rem; flex-wrap: wrap;"></div>
             </div>
 
-            <!-- Content Area (Video or Quiz) -->
+            <!--Content Area(Video or Quiz)-- >
             <div id="content-display" style="
                 background: #000;
                 min-height: 500px;
@@ -1020,12 +1088,12 @@ async function renderCourseDetail(id) {
             ">
                 <h3 id="placeholder-msg">請選擇單元</h3>
             </div>
-            <!-- Helper text -->
-            <p style="text-align:center; margin-top:1rem; color:#888; font-size:0.9rem;">
-                若影片無法播放，請確認瀏覽器支援或網址權限
-            </p>
+            <!--Helper text-- >
+        <p style="text-align:center; margin-top:1rem; color:#888; font-size:0.9rem;">
+            若影片無法播放，請確認瀏覽器支援或網址權限
+        </p>
         </div>
-    `;
+        `;
 
     const btnContainer = div.querySelector('#unit-buttons-container');
     const contentDisplay = div.querySelector('#content-display');
@@ -1040,14 +1108,14 @@ async function renderCourseDetail(id) {
         const percentage = Math.round((completedCount / totalCount) * 100);
 
         progressBarContainer.innerHTML = `
-            <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem; font-size: 0.9rem; color: #666;">
+        <div style = "display: flex; justify-content: space-between; margin-bottom: 0.5rem; font-size: 0.9rem; color: #666;" >
                 <span>整體進度</span>
                 <span>${completedCount}/${totalCount} 單元 (${percentage}%)</span>
             </div>
-            <div class="progress-bar">
-                <div class="progress-fill" style="width: ${percentage}%; background-color: ${themeColor};"></div>
-            </div>
-        `;
+        <div class="progress-bar">
+            <div class="progress-fill" style="width: ${percentage}%; background-color: ${themeColor};"></div>
+        </div>
+    `;
     };
 
     updateCourseProgress();
@@ -1725,7 +1793,7 @@ async function renderProgress(targetUserId = null) {
                 <h3 style="color: #888; margin-bottom: 1rem;">尚無學習紀錄</h3>
                 <p style="color: #999;">開始觀看課程後，進度會顯示在這裡</p>
                 <a href="#home" class="btn" style="margin-top: 1.5rem;">前往課程首頁</a>
-            </div >
+            </div>
         `;
         return div;
     }
@@ -2022,55 +2090,62 @@ function renderAdmin() {
     const container = document.createElement('div');
 
     // 1. Admin Login Logic
-    if (!state.adminLoggedIn) {
+    // If ALREADY Admin (via Google/Email Login) OR Legacy Admin Logged In
+    if (!state.isAdmin && !state.adminLoggedIn) {
         container.innerHTML = `
         <div class="container" style="max-width: 400px; margin-top: 5rem; text-align: center;">
                  <h2 class="mb-4">管理員登入</h2>
+                 <p style="color:#666; margin-bottom:1rem;">請先登入管理員帳號</p>
                  <div style="background: white; padding: 2rem; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
                     <input type="text" id="admin-user" placeholder="帳號" style="width: 100%; padding: 10px; margin-bottom: 1rem; border: 1px solid #ddd; border-radius: 4px;">
                     <input type="password" id="admin-pass" placeholder="密碼" style="width: 100%; padding: 10px; margin-bottom: 1rem; border: 1px solid #ddd; border-radius: 4px;">
                     <button class="btn full-width" id="btn-login" style="width:100%;">登入</button>
                     <p id="login-error" style="color: red; margin-top: 1rem; display: none;">帳號或密碼錯誤</p>
                  </div>
+                 <div style="margin-top:2rem;">
+                    <button id="btn-back-home" class="btn" style="background:transparent; color:#666;">回首頁</button>
+                 </div>
              </div>
     `;
-
         setTimeout(() => {
             const performLogin = () => {
+                // ... (Keep existing login logic logic here? No, I need to provide it)
                 const u = container.querySelector('#admin-user').value;
                 const p = container.querySelector('#admin-pass').value;
-                if (u === 'admin' && p === 'mitachr') {
+                if (u === 'admin' && p === 'mitachr') { // Legacy Info
                     state.adminLoggedIn = true;
                     state.isAdmin = true;
-                    sessionStorage.setItem('localAdminUser', 'true'); // Persist admin session
-                    // Trigger a re-render of the main app container for the admin route
                     renderApp('#admin');
                 } else {
                     container.querySelector('#login-error').style.display = 'block';
                 }
             };
-
             container.querySelector('#btn-login').onclick = performLogin;
-
-            // Add Enter key listener
+            container.querySelector('#btn-back-home').onclick = () => { window.location.hash = '#home'; };
+            // ... (Enter key listener)
             const inputs = container.querySelectorAll('#admin-user, #admin-pass');
             inputs.forEach(input => {
                 input.addEventListener('keyup', (e) => {
-                    if (e.key === 'Enter') {
-                        performLogin();
-                    }
+                    if (e.key === 'Enter') performLogin();
                 });
             });
         }, 0);
         return container;
     }
 
-    // 2. Admin Workspace
-    const courses = state.courses;
 
-    // Common Header Helper
-    function renderAdminHeader() {
-        container.innerHTML = `
+    return container;
+}
+
+// 2. Admin Workspace
+// 2. Admin Workspace
+// const courses = state.courses; // MOVED INSIDE FUNCTIONS TO ENSURE LATEST STATE
+
+// Common Header Helper
+function renderAdminHeader() {
+    const container = document.getElementById('main-container');
+    if (!container) return;
+    container.innerHTML = `
         <div class="full-width" style="background: var(--primary-color); color: white; padding: 1.5rem 0;">
             <div class="container">
                 <div class="flex justify-between items-center mb-4">
@@ -2079,6 +2154,7 @@ function renderAdmin() {
                 <div class="flex gap-2">
                     <button id="tab-courses" class="btn" style="${state.adminViewMode === 'courses' ? 'background:white; color:var(--primary-color);' : 'background:transparent; color:white; border:1px solid white;'}">課程列表</button>
                     <button id="tab-users" class="btn" style="${state.adminViewMode === 'users' ? 'background:white; color:var(--primary-color);' : 'background:transparent; color:white; border:1px solid white;'}">學員管理</button>
+                    <button id="tab-archives" class="btn" style="${state.adminViewMode === 'archives' ? 'background:white; color:var(--primary-color);' : 'background:transparent; color:white; border:1px solid white;'}">已封存資料</button>
                     <button id="tab-behavior" class="btn" style="${state.adminViewMode === 'behavior' ? 'background:white; color:var(--primary-color);' : 'background:transparent; color:white; border:1px solid white;'}">行為分析</button>
                 </div>
             </div>
@@ -2086,17 +2162,18 @@ function renderAdmin() {
         <div id="admin-workspace" class="container mt-4 mb-4"></div>
         `;
 
-        container.querySelector('#tab-courses').onclick = () => { state.adminViewMode = 'courses'; renderApp('#admin'); };
-        container.querySelector('#tab-users').onclick = () => { state.adminViewMode = 'users'; renderApp('#admin'); };
-        container.querySelector('#tab-behavior').onclick = () => { state.adminViewMode = 'behavior'; renderApp('#admin'); };
-    }
+    container.querySelector('#tab-courses').onclick = () => { state.adminViewMode = 'courses'; renderAppV5(); };
+    container.querySelector('#tab-users').onclick = () => { state.adminViewMode = 'users'; renderAppV5(); };
+    container.querySelector('#tab-archives').onclick = () => { state.adminViewMode = 'archives'; renderAppV5(); };
+    container.querySelector('#tab-behavior').onclick = () => { state.adminViewMode = 'behavior'; renderAppV5(); };
+}
 
-    // --- CSS for Tooltips ---
-    const styleId = 'behavior-dashboard-styles';
-    if (!document.getElementById(styleId)) {
-        const style = document.createElement('style');
-        style.id = styleId;
-        style.textContent = `
+// --- CSS for Tooltips ---
+const styleId = 'behavior-dashboard-styles';
+if (!document.getElementById(styleId)) {
+    const style = document.createElement('style');
+    style.id = styleId;
+    style.textContent = `
             .tooltip-container {
                 position: relative;
                 display: inline-block;
@@ -2156,26 +2233,45 @@ function renderAdmin() {
                 font-size: 0.9rem;
             }
         `;
-        document.head.appendChild(style);
+    document.head.appendChild(style);
+}
+
+function renderCourseList() {
+    renderAdminHeader();
+    const container = document.getElementById('main-container');
+    if (!container) return;
+    const workspace = document.getElementById('admin-workspace');
+
+    const card = document.createElement('div');
+    card.style.background = 'white';
+    card.style.padding = '2rem';
+    card.style.boxShadow = '0 4px 10px rgba(0,0,0,0.05)';
+
+    // Fix: Get latest courses from state
+    let courses = state.courses;
+
+    // Auto-fetch if empty (e.g. direct admin login)
+    if (!courses || courses.length === 0) {
+        console.log('Admin: No courses found, attempting fetch...');
+        fetchCourses().then(() => {
+            state.courses = window.state.courses; // Resync
+            if (document.getElementById('admin-workspace')) {
+                renderCourseList(); // Re-render
+            }
+        });
+        // Render loading state meanwhile
+        workspace.innerHTML = '<div style="text-align:center; padding:2rem;">正在載入課程數據...</div>';
+        return;
     }
 
-    function renderCourseList() {
-        renderAdminHeader();
-        const workspace = container.querySelector('#admin-workspace');
+    // Sort Toggle
+    const currentSort = state.adminSortBy || 'openDate';
+    const sortLabel = currentSort === 'openDate' ? '線上開放日期' :
+        currentSort === 'actualDate' ? '實際課程日期' : '上架狀態';
 
-        const card = document.createElement('div');
-        card.style.background = 'white';
-        card.style.padding = '2rem';
-        card.style.boxShadow = '0 4px 10px rgba(0,0,0,0.05)';
-
-        // Sort Toggle
-        const currentSort = state.adminSortBy || 'openDate';
-        const sortLabel = currentSort === 'openDate' ? '線上開放日期' :
-            currentSort === 'actualDate' ? '實際課程日期' : '上架狀態';
-
-        const header = document.createElement('div');
-        header.className = 'flex justify-between items-center mb-4 admin-header';
-        header.innerHTML = `
+    const header = document.createElement('div');
+    header.className = 'flex justify-between items-center mb-4 admin-header';
+    header.innerHTML = `
         <div class="flex items-center gap-4 admin-title-group">
             <h2 style="margin:0; white-space: nowrap;">課程列表</h2>
             <div class="admin-sort-controls">
@@ -2193,139 +2289,139 @@ function renderAdmin() {
             <button class="btn" id="btn-add-course">+ 新增課程</button>
         </div>
     `;
-        card.appendChild(header);
+    card.appendChild(header);
 
-        // Batch Delete Logic
-        header.querySelector('#btn-batch-delete').onclick = async () => {
-            const selected = Array.from(document.querySelectorAll('.course-checkbox:checked')).map(cb => cb.value);
-            if (selected.length === 0) return;
+    // Batch Delete Logic
+    header.querySelector('#btn-batch-delete').onclick = async () => {
+        const selected = Array.from(document.querySelectorAll('.course-checkbox:checked')).map(cb => cb.value);
+        if (selected.length === 0) return;
 
-            if (confirm(`確定要刪除選取的 ${selected.length} 堂課程嗎？\n此動作無法復原。`)) {
+        if (confirm(`確定要刪除選取的 ${selected.length} 堂課程嗎？\n此動作無法復原。`)) {
+            try {
+                const promises = selected.map(id => deleteDoc(doc(db, "courses", id)));
+                await Promise.all(promises);
+                await fetchCourses();
+                renderCourseList();
+                alert('刪除成功！');
+            } catch (e) {
+                console.error("Batch delete failed", e);
+                alert("刪除失敗: " + e.message);
+            }
+        }
+    };
+
+    header.querySelector('#btn-export-progress').onclick = () => showExportDialog();
+    header.querySelector('#sort-select').onchange = (e) => {
+        state.adminSortBy = e.target.value;
+        renderCourseList();
+    };
+
+    // Course List Container
+    const listDiv = document.createElement('div');
+    listDiv.style.borderTop = '1px solid #eee';
+    listDiv.style.marginTop = '1rem';
+
+    // Grouping Logic
+    const groups = {}; // { year: { month: [courses] } }
+
+    // Sort courses
+    const sortedCourses = [...courses].sort((a, b) => {
+        if (currentSort === 'status') {
+            // 1. Status: ON AIR (true) > Ended (false)
+            const statusA = isCourseAvailable(a);
+            const statusB = isCourseAvailable(b);
+            if (statusA !== statusB) {
+                return statusA ? -1 : 1; // True comes first
+            }
+            // 2. Date: End Date Ascending (Old -> New)
+            const endA = a.endDate || '9999-99-99';
+            const endB = b.endDate || '9999-99-99';
+            return endA.localeCompare(endB);
+        } else {
+            // Default Date Sort Descending
+            const dateA = currentSort === 'openDate' ? (a.startDate || '0000-00-00') : (a.actualStartDate || '0000-00-00');
+            const dateB = currentSort === 'openDate' ? (b.startDate || '0000-00-00') : (b.actualStartDate || '0000-00-00');
+            return dateB.localeCompare(dateA);
+        }
+    });
+
+    sortedCourses.forEach(c => {
+        if (currentSort === 'status') {
+            // Group by Status
+            const status = isCourseAvailable(c) ? 'ON AIR' : '已結束課程';
+            // Fake Year/Month structure for compatibility or simplify?
+            // Let's use Year = Status, Month = '列表'
+            if (!groups[status]) groups[status] = {};
+            if (!groups[status]['清單']) groups[status]['清單'] = [];
+            groups[status]['清單'].push(c);
+        } else {
+            // Date Grouping
+            const dateStr = currentSort === 'openDate' ? c.startDate : c.actualStartDate;
+            let year = '其他';
+            let month = '其他';
+
+            if (dateStr) {
                 try {
-                    const promises = selected.map(id => deleteDoc(doc(db, "courses", id)));
-                    await Promise.all(promises);
-                    await fetchCourses();
-                    renderCourseList();
-                    alert('刪除成功！');
-                } catch (e) {
-                    console.error("Batch delete failed", e);
-                    alert("刪除失敗: " + e.message);
-                }
+                    const d = new Date(dateStr);
+                    if (!isNaN(d.getTime())) {
+                        year = d.getFullYear().toString();
+                        month = (d.getMonth() + 1).toString().padStart(2, '0') + '月';
+                    }
+                } catch (e) { }
             }
-        };
 
-        header.querySelector('#btn-export-progress').onclick = () => showExportDialog();
-        header.querySelector('#sort-select').onchange = (e) => {
-            state.adminSortBy = e.target.value;
-            renderCourseList();
-        };
+            if (!groups[year]) groups[year] = {};
+            if (!groups[year][month]) groups[year][month] = [];
+            groups[year][month].push(c);
+        }
+    });
 
-        // Course List Container
-        const listDiv = document.createElement('div');
-        listDiv.style.borderTop = '1px solid #eee';
-        listDiv.style.marginTop = '1rem';
+    // Render Groups
+    Object.keys(groups).sort((a, b) => b.localeCompare(a)).forEach(year => {
+        const yearBlock = document.createElement('details');
+        yearBlock.open = true;
+        yearBlock.style.marginBottom = '1rem';
 
-        // Grouping Logic
-        const groups = {}; // { year: { month: [courses] } }
+        const totalInYear = Object.values(groups[year]).reduce((acc, curr) => acc + curr.length, 0);
 
-        // Sort courses
-        const sortedCourses = [...courses].sort((a, b) => {
-            if (currentSort === 'status') {
-                // 1. Status: ON AIR (true) > Ended (false)
-                const statusA = isCourseAvailable(a);
-                const statusB = isCourseAvailable(b);
-                if (statusA !== statusB) {
-                    return statusA ? -1 : 1; // True comes first
-                }
-                // 2. Date: End Date Ascending (Old -> New)
-                const endA = a.endDate || '9999-99-99';
-                const endB = b.endDate || '9999-99-99';
-                return endA.localeCompare(endB);
-            } else {
-                // Default Date Sort Descending
-                const dateA = currentSort === 'openDate' ? (a.startDate || '0000-00-00') : (a.actualStartDate || '0000-00-00');
-                const dateB = currentSort === 'openDate' ? (b.startDate || '0000-00-00') : (b.actualStartDate || '0000-00-00');
-                return dateB.localeCompare(dateA);
-            }
-        });
-
-        sortedCourses.forEach(c => {
-            if (currentSort === 'status') {
-                // Group by Status
-                const status = isCourseAvailable(c) ? 'ON AIR' : '已結束課程';
-                // Fake Year/Month structure for compatibility or simplify?
-                // Let's use Year = Status, Month = '列表'
-                if (!groups[status]) groups[status] = {};
-                if (!groups[status]['清單']) groups[status]['清單'] = [];
-                groups[status]['清單'].push(c);
-            } else {
-                // Date Grouping
-                const dateStr = currentSort === 'openDate' ? c.startDate : c.actualStartDate;
-                let year = '其他';
-                let month = '其他';
-
-                if (dateStr) {
-                    try {
-                        const d = new Date(dateStr);
-                        if (!isNaN(d.getTime())) {
-                            year = d.getFullYear().toString();
-                            month = (d.getMonth() + 1).toString().padStart(2, '0') + '月';
-                        }
-                    } catch (e) { }
-                }
-
-                if (!groups[year]) groups[year] = {};
-                if (!groups[year][month]) groups[year][month] = [];
-                groups[year][month].push(c);
-            }
-        });
-
-        // Render Groups
-        Object.keys(groups).sort((a, b) => b.localeCompare(a)).forEach(year => {
-            const yearBlock = document.createElement('details');
-            yearBlock.open = true;
-            yearBlock.style.marginBottom = '1rem';
-
-            const totalInYear = Object.values(groups[year]).reduce((acc, curr) => acc + curr.length, 0);
-
-            yearBlock.innerHTML = `
+        yearBlock.innerHTML = `
                 <summary style="font-weight: bold; font-size: 1.2rem; cursor: pointer; padding: 0.5rem 0; color: #333;">
                     ${year} 年度 (${totalInYear})
                 </summary>
                 <div class="year-content" style="padding-left: 1rem;"></div>
             `;
 
-            const yearContainer = yearBlock.querySelector('.year-content');
+        const yearContainer = yearBlock.querySelector('.year-content');
 
-            const months = groups[year];
-            Object.keys(months).sort((a, b) => b.localeCompare(a)).forEach(month => {
-                const monthBlock = document.createElement('details');
-                monthBlock.open = true;
-                monthBlock.style.marginBottom = '0.5rem';
-                monthBlock.innerHTML = `
+        const months = groups[year];
+        Object.keys(months).sort((a, b) => b.localeCompare(a)).forEach(month => {
+            const monthBlock = document.createElement('details');
+            monthBlock.open = true;
+            monthBlock.style.marginBottom = '0.5rem';
+            monthBlock.innerHTML = `
                     <summary style="font-weight: 500; font-size: 1rem; cursor: pointer; padding: 0.5rem 0; color: #666;">
                         ${month}
                     </summary>
                     <div class="month-content" style="padding-left: 0.5rem;"></div>
                 `;
 
-                const monthContainer = monthBlock.querySelector('.month-content');
+            const monthContainer = monthBlock.querySelector('.month-content');
 
-                months[month].forEach(course => {
-                    const row = document.createElement('div');
-                    row.className = 'course-item flex justify-between items-center';
-                    row.style.padding = '1rem';
-                    row.style.borderBottom = '1px solid #eee';
-                    row.style.background = '#fff';
+            months[month].forEach(course => {
+                const row = document.createElement('div');
+                row.className = 'course-item flex justify-between items-center';
+                row.style.padding = '1rem';
+                row.style.borderBottom = '1px solid #eee';
+                row.style.background = '#fff';
 
-                    const isOnAir = isCourseAvailable(course);
-                    const statusHtml = isOnAir
-                        ? `<span style="color: #d32f2f; font-weight: bold; margin-left: 0.5rem; font-size: 0.9rem;">● ON AIR</span>`
-                        : `<span style="color: #999; margin-left: 0.5rem; font-size: 0.9rem;">(已結束)</span>`;
+                const isOnAir = isCourseAvailable(course);
+                const statusHtml = isOnAir
+                    ? `<span style="color: #d32f2f; font-weight: bold; margin-left: 0.5rem; font-size: 0.9rem;">● ON AIR</span>`
+                    : `<span style="color: #999; margin-left: 0.5rem; font-size: 0.9rem;">(已結束)</span>`;
 
-                    const courseUrl = `${window.location.origin}${window.location.pathname}#course/${course.id}`;
+                const courseUrl = `${window.location.origin}${window.location.pathname}#course/${course.id}`;
 
-                    row.innerHTML = `
+                row.innerHTML = `
                         <div style="margin-right: 15px;">
                             <input type="checkbox" class="course-checkbox" value="${course.id}" style="transform: scale(1.3); cursor: pointer;">
                         </div>
@@ -2348,127 +2444,130 @@ function renderAdmin() {
                         </div>
                     `;
 
-                    // Checkbox handler
-                    row.querySelector('.course-checkbox').onchange = () => {
-                        const anyChecked = document.querySelectorAll('.course-checkbox:checked').length > 0;
-                        const btn = document.getElementById('btn-batch-delete');
-                        if (btn) btn.style.display = anyChecked ? 'block' : 'none';
-                    };
+                // Checkbox handler
+                row.querySelector('.course-checkbox').onchange = () => {
+                    const anyChecked = document.querySelectorAll('.course-checkbox:checked').length > 0;
+                    const btn = document.getElementById('btn-batch-delete');
+                    if (btn) btn.style.display = anyChecked ? 'block' : 'none';
+                };
 
-                    row.querySelector('.view-stats-btn').onclick = async () => {
-                        const workspace = container.querySelector('#admin-workspace');
-                        workspace.innerHTML = '載入中...'; // Quick feedback
-                        workspace.innerHTML = '';
-                        workspace.appendChild(await renderCourseStats(course.id));
-                    };
+                row.querySelector('.view-stats-btn').onclick = async () => {
+                    const workspace = container.querySelector('#admin-workspace');
+                    workspace.innerHTML = '載入中...'; // Quick feedback
+                    workspace.innerHTML = '';
+                    workspace.appendChild(await renderCourseStats(course.id));
+                };
 
-                    row.querySelector('.edit-btn').onclick = () => renderEditor(course);
-                    row.querySelector('.delete-btn').onclick = async () => {
-                        if (confirm(`確定要刪除課程「${course.title}」嗎？\n此動作無法復原。`)) {
-                            await deleteDoc(doc(db, "courses", course.id));
-                            await fetchCourses();
-                            renderCourseList();
-                        }
-                    };
-                    row.querySelector('.copy-link-btn').onclick = (e) => {
-                        navigator.clipboard.writeText(e.target.dataset.url).then(() => {
-                            const original = e.target.textContent;
-                            e.target.textContent = 'Copied!';
-                            setTimeout(() => e.target.textContent = original, 2000);
-                        });
-                    };
+                row.querySelector('.edit-btn').onclick = () => renderEditor(course);
+                row.querySelector('.delete-btn').onclick = async () => {
+                    if (confirm(`確定要刪除課程「${course.title}」嗎？\n此動作無法復原。`)) {
+                        await deleteDoc(doc(db, "courses", course.id));
+                        await fetchCourses();
+                        renderCourseList();
+                    }
+                };
+                row.querySelector('.copy-link-btn').onclick = (e) => {
+                    navigator.clipboard.writeText(e.target.dataset.url).then(() => {
+                        const original = e.target.textContent;
+                        e.target.textContent = 'Copied!';
+                        setTimeout(() => e.target.textContent = original, 2000);
+                    });
+                };
 
-                    monthContainer.appendChild(row);
-                });
-
-                yearContainer.appendChild(monthBlock);
+                monthContainer.appendChild(row);
             });
-            listDiv.appendChild(yearBlock);
+
+            yearContainer.appendChild(monthBlock);
+        });
+        listDiv.appendChild(yearBlock);
+    });
+
+    card.appendChild(listDiv);
+    workspace.appendChild(card);
+
+    // Add Course
+    header.querySelector('#btn-add-course').onclick = () => {
+        const today = new Date().toISOString().split('T')[0];
+        const nextYear = new Date();
+        nextYear.setFullYear(nextYear.getFullYear() + 1);
+
+        // Open template directly
+        renderEditor({
+            title: '新課程',
+            color: '#0ABAB5',
+            startDate: today,
+            endDate: nextYear.toISOString().split('T')[0],
+            parts: []
+        });
+    };
+}
+
+async function renderBehavioralDashboard() {
+    console.log("Entering renderBehavioralDashboard");
+    const container = document.getElementById('main-container'); // Fix: Get Container
+    if (!container) return;
+    renderAdminHeader();
+    const workspace = document.getElementById('admin-workspace'); // Fix: Get Workspace directly (safer) OR container.querySelector('#admin-workspace') is fine too if container is valid.
+    // But let's use document.getElementById('admin-workspace') for robustness as header just rendered it.
+    workspace.innerHTML = '<p style="text-align:center; padding:2rem;">正在分析行為數據...</p>';
+
+    try {
+        console.log("Fetching progress data...");
+        const allProgress = [];
+
+        // Try enabling direct access or fallback
+        if (typeof getAllProgress === 'function') {
+            try {
+                const res = await getAllProgress();
+                res.forEach(p => allProgress.push(p));
+            } catch (e) {
+                console.warn("getAllProgress failed", e);
+            }
+        }
+
+        if (allProgress.length === 0) {
+            // Fallback to direct DB fetch
+            const snapshot = await getDocs(collection(db, "userProgress"));
+            snapshot.forEach(doc => allProgress.push(doc.data()));
+        }
+
+        console.log("Progress records found:", allProgress.length);
+
+        // Aggregation Logic
+        let totalTES = 0;
+        let totalSeekBacks = 0;
+        let totalSessions = 0;
+        const courseMetrics = {}; // { courseId: { title, tes, seeks, count } }
+
+        allProgress.forEach(p => {
+            if (p.units) {
+                p.units.forEach(u => {
+                    if (u.behavioralMetrics) {
+                        const tes = u.behavioralMetrics.trueEngagementScore || 0;
+                        const seeks = u.behavioralMetrics.seekBackCount || 0;
+
+                        totalTES += tes;
+                        totalSeekBacks += seeks;
+                        totalSessions++;
+
+                        // Course Level Aggregation
+                        if (!courseMetrics[p.courseId]) {
+                            courseMetrics[p.courseId] = { title: p.courseName, tes: 0, seeks: 0, count: 0 };
+                        }
+                        courseMetrics[p.courseId].tes += tes;
+                        courseMetrics[p.courseId].seeks += seeks;
+                        courseMetrics[p.courseId].count++;
+                    }
+                });
+            }
         });
 
-        card.appendChild(listDiv);
-        workspace.appendChild(card);
+        console.log("Aggregation complete", { totalTES, totalSessions });
 
-        // Add Course
-        header.querySelector('#btn-add-course').onclick = () => {
-            const today = new Date().toISOString().split('T')[0];
-            const nextYear = new Date();
-            nextYear.setFullYear(nextYear.getFullYear() + 1);
+        const avgTES = totalSessions > 0 ? (totalTES / totalSessions).toFixed(1) : '0.0';
 
-            // Open template directly
-            renderEditor({
-                title: '新課程',
-                color: '#0ABAB5',
-                startDate: today,
-                endDate: nextYear.toISOString().split('T')[0],
-                parts: []
-            });
-        };
-    }
-
-    async function renderBehavioralDashboard() {
-        console.log("Entering renderBehavioralDashboard");
-        renderAdminHeader();
-        const workspace = container.querySelector('#admin-workspace');
-        workspace.innerHTML = '<p style="text-align:center; padding:2rem;">正在分析行為數據...</p>';
-
-        try {
-            console.log("Fetching progress data...");
-            const allProgress = [];
-
-            // Try enabling direct access or fallback
-            if (typeof getAllProgress === 'function') {
-                try {
-                    const res = await getAllProgress();
-                    res.forEach(p => allProgress.push(p));
-                } catch (e) {
-                    console.warn("getAllProgress failed", e);
-                }
-            }
-
-            if (allProgress.length === 0) {
-                // Fallback to direct DB fetch
-                const snapshot = await getDocs(collection(db, "userProgress"));
-                snapshot.forEach(doc => allProgress.push(doc.data()));
-            }
-
-            console.log("Progress records found:", allProgress.length);
-
-            // Aggregation Logic
-            let totalTES = 0;
-            let totalSeekBacks = 0;
-            let totalSessions = 0;
-            const courseMetrics = {}; // { courseId: { title, tes, seeks, count } }
-
-            allProgress.forEach(p => {
-                if (p.units) {
-                    p.units.forEach(u => {
-                        if (u.behavioralMetrics) {
-                            const tes = u.behavioralMetrics.trueEngagementScore || 0;
-                            const seeks = u.behavioralMetrics.seekBackCount || 0;
-
-                            totalTES += tes;
-                            totalSeekBacks += seeks;
-                            totalSessions++;
-
-                            // Course Level Aggregation
-                            if (!courseMetrics[p.courseId]) {
-                                courseMetrics[p.courseId] = { title: p.courseName, tes: 0, seeks: 0, count: 0 };
-                            }
-                            courseMetrics[p.courseId].tes += tes;
-                            courseMetrics[p.courseId].seeks += seeks;
-                            courseMetrics[p.courseId].count++;
-                        }
-                    });
-                }
-            });
-
-            console.log("Aggregation complete", { totalTES, totalSessions });
-
-            const avgTES = totalSessions > 0 ? (totalTES / totalSessions).toFixed(1) : '0.0';
-
-            // Generate View
-            workspace.innerHTML = `
+        // Generate View
+        workspace.innerHTML = `
                 <div class="container">
                     <h2 class="mb-4">📊 行為分析儀表板 (Behavioral Analytics)</h2>
                     
@@ -2539,110 +2638,126 @@ function renderAdmin() {
                 </div>
             `;
 
-        } catch (e) {
-            console.error("Dashboard render failed", e);
-            workspace.innerHTML = `<p style="color:red;">載入失敗: ${e.message}</p>`;
-        }
+    } catch (e) {
+        console.error("Dashboard render failed", e);
+        workspace.innerHTML = `<p style="color:red;">載入失敗: ${e.message}</p>`;
     }
+}
 
-    async function renderUserManagement() {
-        renderAdminHeader();
-        const workspace = container.querySelector('#admin-workspace');
+async function renderUserManagement() {
+    const container = document.getElementById('main-container');
+    if (!container) return;
+    renderAdminHeader();
+    const workspace = document.getElementById('admin-workspace');
 
-        workspace.innerHTML = '<p style="text-align:center; padding:2rem;">正在讀取學員資料...</p>';
+    workspace.innerHTML = '<p style="text-align:center; padding:2rem;">正在讀取學員資料...</p>';
 
-        try {
-            const [allProgress, usersSnap] = await Promise.all([
-                getAllProgress(),
-                getDocs(collection(db, "users"))
-            ]);
+    try {
+        const [allProgress, usersSnap] = await Promise.all([
+            getAllProgress(),
+            getDocs(collection(db, "users"))
+        ]);
 
-            const usersMap = {};
+        const usersMap = {};
 
-            // 1. Load registered users
-            usersSnap.forEach(docSnap => {
-                const data = docSnap.data();
-                usersMap[docSnap.id] = {
-                    userId: docSnap.id, // ID is doc ID
-                    userName: data.userName || '',
-                    email: data.email || '',
-                    courses: [],
-                    lastActive: data.createdAt || null // Fallback
-                };
-            });
+        // 1. Load registered users
+        usersSnap.forEach(docSnap => {
+            const data = docSnap.data();
+            // Filter archived (Soft Delete)
+            if (data.status === 'archived') return;
 
-            // 2. Merge Progress Data
-            allProgress.forEach(p => {
-                if (!usersMap[p.userId]) {
-                    // User has progress but not in 'users' collection (legacy or error)
-                    usersMap[p.userId] = {
-                        userId: p.userId,
-                        userName: p.userName,
-                        email: '-', // No email known
-                        courses: [],
-                        lastActive: null
-                    };
-                }
+            usersMap[docSnap.id] = {
+                userId: docSnap.id, // Auth UID
+                empId: data.userId || '未綁定', // Employee ID
+                userName: data.userName || '',
+                email: data.email || '',
+                courses: [],
+                lastActive: data.createdAt || null
+            };
+        });
 
-                usersMap[p.userId].courses.push(p);
+        // 2. Merge Progress Data
+        allProgress.forEach(p => {
+            // Logic adjusted: Progress uses userId which might be Auth UID or Emp ID? 
+            // V5 System: userId in Progress should be EMP ID (Legacy) or Auth UID (New)? 
+            // Legacy system used Emp ID as userId.
+            // New system binds Auth UID -> Emp ID.
+            // Progress "userId" field is likely EMP ID.
+            // So we map by Emp ID.
 
-                // Update timestamps
+            // We need to find the User Object with this Emp ID.
+            const userByEmpId = Object.values(usersMap).find(u => u.empId === p.userId);
+
+            if (userByEmpId) {
+                userByEmpId.courses.push(p);
                 if (p.updatedAt) {
-                    if (!usersMap[p.userId].lastActive || p.updatedAt > usersMap[p.userId].lastActive) {
-                        usersMap[p.userId].lastActive = p.updatedAt;
+                    if (!userByEmpId.lastActive || p.updatedAt > userByEmpId.lastActive) {
+                        userByEmpId.lastActive = p.updatedAt;
                     }
                 }
-            });
+            } else {
+                // Orphaned Progress (Legacy User deleted or not in system)
+                // Or the progress userId IS the map key (if legacy imported)
+                // For now, let's treat p.userId as the display "Emp ID"
+                if (!usersMap[p.userId]) {
+                    // Check if it's already in map by ID
+                    usersMap[p.userId] = {
+                        userId: p.userId, // Virtual ID
+                        empId: p.userId,
+                        userName: p.userName || '未知學員',
+                        email: '-',
+                        courses: [p],
+                        lastActive: p.updatedAt
+                    };
+                } else {
+                    usersMap[p.userId].courses.push(p);
+                }
+            }
+        });
 
-            const userList = Object.values(usersMap).sort((a, b) => {
-                const timeA = a.lastActive || '';
-                const timeB = b.lastActive || '';
-                return timeB.localeCompare(timeA);
-            });
+        const userList = Object.values(usersMap).sort((a, b) => {
+            const timeA = a.lastActive || '';
+            const timeB = b.lastActive || '';
+            return timeB.localeCompare(timeA);
+        });
 
-            const card = document.createElement('div');
-            card.style.background = 'white';
-            card.style.padding = '2rem';
-            card.style.borderRadius = '8px';
-            card.style.boxShadow = '0 4px 10px rgba(0,0,0,0.05)';
+        const card = document.createElement('div');
+        card.style.background = 'white';
+        card.style.padding = '2rem';
+        card.style.borderRadius = '8px';
+        card.style.boxShadow = '0 4px 10px rgba(0,0,0,0.05)';
 
-            card.innerHTML = `
+        card.innerHTML = `
                 <div class="flex justify-between items-center mb-4">
                      <h2 style="margin:0;">學員管理 (${userList.length} 人)</h2>
                      <div class="flex gap-2">
-                        <button class="btn" id="btn-batch-delete-users" style="background-color: #dc3545; display: none;">🗑️ 刪除所選學員</button>
-                        <button class="btn" id="btn-add-user">+ 新增學員</button>
+                        <button class="btn" id="btn-merge-users" style="background-color: #6610f2;">🔄 合併帳號</button>
+                        <button class="btn" id="btn-inv-user" style="background-color: #0d6efd;">📧 邀請學員</button>
                      </div>
                 </div>
+                <!-- Search/Filter could go here -->
                 <div style="overflow-x: auto;">
                     <table style="width: 100%; border-collapse: collapse;">
                         <thead>
                             <tr style="background: #f8f9fa; border-bottom: 2px solid #eee;">
-                                <th style="padding: 1rem; text-align: left;">
-                                    <input type="checkbox" id="user-select-all" style="cursor: pointer; transform: scale(1.3);">
-                                </th>
                                 <th style="padding: 1rem; text-align: left;">員工編號</th>
                                 <th style="padding: 1rem; text-align: left;">姓名</th>
                                 <th style="padding: 1rem; text-align: left;">Email</th>
-                                <th style="padding: 1rem; text-align: left;">參與課程數</th>
-                                <th style="padding: 1rem; text-align: left;">最後活動時間</th>
+                                <th style="padding: 1rem; text-align: left;">參與課程</th>
                                 <th style="padding: 1rem; text-align: left;">功能</th>
                             </tr>
                         </thead>
                         <tbody>
                             ${userList.map(u => `
                                 <tr style="border-bottom: 1px solid #eee;">
-                                    <td style="padding: 1rem;">
-                                        <input type="checkbox" class="user-checkbox" value="${u.userId}" style="cursor: pointer; transform: scale(1.3);">
-                                    </td>
-                                    <td style="padding: 1rem;" data-label="員工編號">${u.userId}</td>
-                                    <td style="padding: 1rem;" data-label="姓名">${u.userName}</td>
-                                    <td style="padding: 1rem;" data-label="Email">${u.email || '-'}</td>
-                                    <td style="padding: 1rem;" data-label="參與課程數">${u.courses.length}</td>
-                                    <td style="padding: 1rem; color: #666;" data-label="最後活動時間">${u.lastActive ? new Date(u.lastActive).toLocaleString('zh-TW') : '-'}</td>
-                                    <td style="padding: 1rem; display: flex; gap: 0.5rem;" data-label="功能">
-                                        <button class="btn view-user-progress-btn" data-userid="${u.userId}" style="padding: 4px 12px; font-size: 0.85rem; background:#17a2b8; color:white;">學習紀錄</button>
-                                        <button class="btn edit-user-btn" data-userid="${u.userId}" style="padding: 4px 12px; font-size: 0.85rem; background:#ffc107; color:black;">編輯</button>
+                                    <td style="padding: 1rem; font-weight:bold;">${u.empId}</td>
+                                    <td style="padding: 1rem;">${u.userName}</td>
+                                    <td style="padding: 1rem;">${u.email || '-'}</td>
+                                    <td style="padding: 1rem;">${u.courses.length}</td>
+                                    <td style="padding: 1rem; display: flex; gap: 0.5rem;">
+                                        <button class="btn view-progress" data-id="${u.userId}" data-empid="${u.empId}" style="padding: 4px 12px; font-size: 0.85rem; background:#17a2b8; color:white;">紀錄</button>
+                                        <button class="btn edit-user" data-id="${u.userId}" style="padding: 4px 12px; font-size: 0.85rem; background:#ffc107; color:black;">編輯</button>
+                                        <button class="btn delete-user" data-id="${u.userId}" style="padding: 4px 12px; font-size: 0.85rem; background:#dc3545; color:white;">刪除</button>
                                     </td>
                                 </tr>
                             `).join('')}
@@ -2651,145 +2766,191 @@ function renderAdmin() {
                 </div>
             `;
 
-            // Bind Edit Buttons
-            card.querySelectorAll('.edit-user-btn').forEach(btn => {
-                btn.onclick = () => {
-                    const userId = btn.dataset.userid;
-                    const user = usersMap[userId];
-                    renderUserEditor(user);
-                };
-            });
+        // --- Handlers ---
 
-            // Bind View Progress Buttons
-            card.querySelectorAll('.view-user-progress-btn').forEach(btn => {
-                btn.onclick = async () => {
-                    const userId = btn.dataset.userid;
-                    const workspace = container.querySelector('#admin-workspace');
-                    workspace.innerHTML = '載入中...';
-                    workspace.innerHTML = '';
-                    workspace.appendChild(await renderProgress(userId));
-                };
-            });
+        // Invite User
+        card.querySelector('#btn-inv-user').onclick = () => {
+            const email = prompt("請輸入新學員的 Email:\n系統將發送重設密碼信，學員可自行設定密碼並登入。");
+            if (email && email.includes('@')) {
+                inviteUser(email);
+            } else if (email) {
+                alert("Email 格式不正確");
+            }
+        };
 
-            // Bind Delete Buttons (Single)
-            card.querySelectorAll('.delete-user-btn').forEach(btn => {
-                btn.onclick = async () => {
-                    const userId = btn.dataset.userid;
-                    const userName = btn.dataset.username;
-                    if (confirm(`確定要刪除學員「${userName} (${userId})」嗎？\n此動作將一併刪除該學員的所有學習紀錄，且無法復原。`)) {
-                        try {
-                            await deleteUser(userId);
-                            renderUserManagement(); // Reload
-                        } catch (e) {
-                            alert('刪除失敗: ' + e.message);
-                        }
-                    }
-                };
-            });
+        // Merge Users
+        card.querySelector('#btn-merge-users').onclick = () => {
+            const source = prompt("請輸入【來源】員工編號 (將被刪除):");
+            if (!source) return;
+            const target = prompt("請輸入【目標】員工編號 (將保留):");
+            if (!target) return;
 
-            // Bind Checkbox Logic
-            const selectAllCb = card.querySelector('#user-select-all');
-            const rowCbs = card.querySelectorAll('.user-checkbox');
-            const batchDeleteBtn = card.querySelector('#btn-batch-delete-users');
+            if (source === target) { alert("來源與目標不能相同"); return; }
+            mergeUsers(source, target);
+        };
 
-            const updateBatchBtn = () => {
-                const checkedCount = card.querySelectorAll('.user-checkbox:checked').length;
-                batchDeleteBtn.style.display = checkedCount > 0 ? 'block' : 'none';
-                batchDeleteBtn.textContent = `🗑️ 刪除所選學員 (${checkedCount})`;
+        // View Progress
+        card.querySelectorAll('.view-progress').forEach(btn => {
+            btn.onclick = async () => {
+                // Use Emp ID for legacy lookup mostly
+                const empId = btn.dataset.empid;
+                const workspace = container.querySelector('#admin-workspace');
+                workspace.innerHTML = '載入中...';
+                workspace.innerHTML = '';
+                workspace.appendChild(await renderProgress(empId)); // Refactored renderProgress handles EmpId lookup? Usually yes.
             };
+        });
 
-            selectAllCb.onchange = (e) => {
-                rowCbs.forEach(cb => cb.checked = e.target.checked);
-                updateBatchBtn();
+        // Edit User
+        card.querySelectorAll('.edit-user').forEach(btn => {
+            btn.onclick = () => {
+                const uid = btn.dataset.id;
+                renderUserEditor(usersMap[uid]);
             };
+        });
 
-            rowCbs.forEach(cb => {
-                cb.onchange = () => {
-                    updateBatchBtn();
-                    // Update header cb state
-                    const allChecked = Array.from(rowCbs).every(c => c.checked);
-                    selectAllCb.checked = allChecked;
-                };
-            });
-
-            // Bind Batch Delete Button
-            batchDeleteBtn.onclick = async () => {
-                const selectedIds = Array.from(card.querySelectorAll('.user-checkbox:checked')).map(cb => cb.value);
-                if (selectedIds.length === 0) return;
-
-                if (confirm(`確定要刪除選取的 ${selectedIds.length} 位學員嗎？\n這些學員的學習紀錄也將一併刪除，且無法復原。`)) {
-                    try {
-                        const btnText = batchDeleteBtn.textContent;
-                        batchDeleteBtn.disabled = true;
-                        batchDeleteBtn.textContent = '刪除中...';
-
-                        await batchDeleteUsers(selectedIds);
-
-                        renderUserManagement(); // Reload
-                        alert('批次刪除成功！');
-                    } catch (e) {
-                        console.error(e);
-                        alert('批次刪除部分或全部失敗: ' + e.message);
-                        batchDeleteBtn.disabled = false;
-                        renderUserManagement(); // Check what's left
-                    }
+        // Delete User (Soft/Hard?)
+        card.querySelectorAll('.delete-user').forEach(btn => {
+            btn.onclick = async () => {
+                if (confirm("確定要刪除此學員嗎？\n這將是【軟刪除】，資料將移至封存區，學員無法再登入。")) {
+                    softDeleteUser(btn.dataset.id);
+                    // renderUserManagement called inside softDeleteUser
                 }
             };
-
-            // Bind Add User Button
-            card.querySelector('#btn-add-user').onclick = () => {
-                renderUserEditor(null);
-            };
-
-            workspace.innerHTML = '';
-            workspace.appendChild(card);
-
-        } catch (e) {
-            console.error(e);
-            workspace.innerHTML = `<p style="color:red; text-align:center;">讀取失敗: ${e.message}</p>`;
-        }
-
-    }
-
-    async function deleteUser(userId) {
-        // 1. Delete user document
-        await deleteDoc(doc(db, "users", userId));
-
-        // 2. Delete user progress documents
-        // Need to query all progress documents for this user
-        const q = query(collection(db, 'userProgress'), where('userId', '==', userId));
-        const snapshot = await getDocs(q);
-        const deletePromises = [];
-        snapshot.forEach(docSnap => {
-            deletePromises.push(deleteDoc(doc(db, 'userProgress', docSnap.id)));
         });
-        await Promise.all(deletePromises);
+
+
+        workspace.innerHTML = '';
+        workspace.appendChild(card);
+
+    } catch (e) {
+        console.error(e);
+        workspace.innerHTML = `<p style="color:red; text-align:center;">讀取失敗: ${e.message}</p>`;
     }
+}
 
-    async function batchDeleteUsers(userIds) {
-        // Parallel delete
-        const promises = userIds.map(id => deleteUser(id));
-        await Promise.all(promises);
+// --- Helper Functions for Admin Actions ---
+
+async function inviteUser(email) {
+    try {
+        // 1. Create User in Auth (Secondary App)
+        // Need dummy password
+        const tempPw = Math.random().toString(36).slice(-8) + "A1!";
+
+        // Init Secondary App
+        const secondaryApp = initializeApp(firebaseConfig, "Secondary");
+        const secondaryAuth = getAuth(secondaryApp);
+
+        const cred = await createUserWithEmailAndPassword(secondaryAuth, email, tempPw);
+        const uid = cred.user.uid;
+
+        // 2. Create Firestore Doc (Unbound ID)
+        await setDoc(doc(db, "users", uid), {
+            email: email,
+            userName: email.split('@')[0], // Default name
+            createdAt: new Date().toISOString(),
+            invited: true
+        });
+
+        // 3. Send Reset Email
+        await sendPasswordResetEmail(secondaryAuth, email);
+
+        // 4. Cleanup
+        await signOut(secondaryAuth);
+        // Delete app? Not exposed in JS SDK easily, but it's fine.
+
+        alert("邀請成功！已發送重設密碼信至 " + email);
+        renderUserManagement();
+
+    } catch (e) {
+        console.error(e);
+        let msg = e.message;
+        if (e.code === 'auth/email-already-in-use') msg = "此 Email 已註冊";
+        alert("邀請失敗: " + msg);
     }
+}
 
-    function renderUserEditor(user) {
-        const isNew = !user;
-        const editingUser = user || { userId: '', userName: '', email: '' };
+async function mergeUsers(sourceEmpId, targetEmpId) {
+    if (!confirm(`確定要將 ${sourceEmpId} 的紀錄合併至 ${targetEmpId} 嗎？\n資料將移轉，${sourceEmpId} 將被封存。`)) return;
+    try {
+        // 1. Find UID of Source
+        const dq = query(collection(db, "users"), where("userId", "==", sourceEmpId), where("status", "!=", "archived"));
+        const dSnap = await getDocs(dq);
+        if (dSnap.empty) { alert("找不到來源學員 (或已封存)"); return; }
+        const sourceUid = dSnap.docs[0].id; // Doc ID
 
-        const workspace = container.querySelector('#admin-workspace');
+        // 2. Move Progress
+        const qSuccess = query(collection(db, "userProgress"), where("userId", "==", sourceEmpId));
+        const pSnap = await getDocs(qSuccess);
 
-        const card = document.createElement('div');
-        card.style.background = 'white';
-        card.style.padding = '2rem';
-        card.style.borderRadius = '8px';
-        card.style.boxShadow = '0 4px 10px rgba(0,0,0,0.05)';
+        const tasks = [];
+        for (const d of pSnap.docs) {
+            const data = d.data();
+            const targetRef = doc(db, "userProgress", `${targetEmpId}_${data.courseId}`);
+            if ((await getDoc(targetRef)).exists()) {
+                tasks.push(deleteDoc(d.ref)); // Collision: keep target, del source
+            } else {
+                tasks.push(setDoc(targetRef, { ...data, userId: targetEmpId, mergedAt: new Date().toISOString() }));
+                tasks.push(deleteDoc(d.ref));
+            }
+        }
+        await Promise.all(tasks);
 
-        const idInputHtml = isNew
-            ? `<input type="text" id="edit-user-id" value="" placeholder="請輸入員工編號 (例如: EMP001)" style="width: 100%; padding: 10px; border: 1px solid #ddd;">`
-            : `<input type="text" value="${editingUser.userId}" disabled style="width: 100%; padding: 10px; background: #f5f5f5; border: 1px solid #ddd; cursor: not-allowed;">
+        // 3. Soft Delete Source
+        await updateDoc(doc(db, "users", sourceUid), {
+            status: 'archived',
+            archivedReason: 'merged',
+            mergedTarget: targetEmpId
+        });
+
+        alert("合併完成。");
+        renderUserManagement();
+
+    } catch (e) {
+        console.error(e);
+        alert("合併失敗: " + e.message);
+    }
+}
+
+async function deleteUser(userId) {
+    // 1. Delete user document
+    await deleteDoc(doc(db, "users", userId));
+
+    // 2. Delete user progress documents
+    // Need to query all progress documents for this user
+    const q = query(collection(db, 'userProgress'), where('userId', '==', userId));
+    const snapshot = await getDocs(q);
+    const deletePromises = [];
+    snapshot.forEach(docSnap => {
+        deletePromises.push(deleteDoc(doc(db, 'userProgress', docSnap.id)));
+    });
+    await Promise.all(deletePromises);
+}
+
+async function batchDeleteUsers(userIds) {
+    // Parallel delete
+    const promises = userIds.map(id => deleteUser(id));
+    await Promise.all(promises);
+}
+
+function renderUserEditor(user) {
+    const isNew = !user;
+    const editingUser = user || { userId: '', userName: '', email: '' };
+
+    const workspace = container.querySelector('#admin-workspace');
+
+    const card = document.createElement('div');
+    card.style.background = 'white';
+    card.style.padding = '2rem';
+    card.style.borderRadius = '8px';
+    card.style.boxShadow = '0 4px 10px rgba(0,0,0,0.05)';
+
+    const idInputHtml = isNew
+        ? `<input type="text" id="edit-user-id" value="" placeholder="請輸入員工編號 (例如: EMP001)" style="width: 100%; padding: 10px; border: 1px solid #ddd;">`
+        : `<input type="text" value="${editingUser.userId}" disabled style="width: 100%; padding: 10px; background: #f5f5f5; border: 1px solid #ddd; cursor: not-allowed;">
                <p style="font-size:0.85rem; color:#999; margin-top:0.25rem;">員工編號無法修改</p>`;
 
-        card.innerHTML = `
+    card.innerHTML = `
             <div class="flex justify-between items-center mb-4">
                 <h2 style="margin:0;">${isNew ? '新增學員' : '編輯學員資料'}</h2>
                 <button class="btn" id="btn-back-users" style="background-color: #6c757d;">&larr; 返回列表</button>
@@ -2818,101 +2979,101 @@ function renderAdmin() {
             </div>
         `;
 
-        const goBack = () => renderUserManagement();
+    const goBack = () => renderUserManagement();
 
-        card.querySelector('#btn-back-users').onclick = goBack;
-        card.querySelector('#btn-cancel-user').onclick = goBack;
+    card.querySelector('#btn-back-users').onclick = goBack;
+    card.querySelector('#btn-cancel-user').onclick = goBack;
 
-        card.querySelector('#btn-save-user').onclick = async () => {
-            let userId = editingUser.userId;
+    card.querySelector('#btn-save-user').onclick = async () => {
+        let userId = editingUser.userId;
 
-            // Check ID if new
+        // Check ID if new
+        if (isNew) {
+            const idInput = card.querySelector('#edit-user-id');
+            if (idInput) {
+                userId = idInput.value.trim().toUpperCase();
+            }
+            if (!userId) {
+                alert('請輸入員工編號');
+                return;
+            }
+            // Check format (optional, e.g. alphanumeric)
+            if (!/^[A-Z0-9]+$/i.test(userId)) {
+                alert('員工編號只能包含英數字');
+                return;
+            }
+        }
+
+        const newName = card.querySelector('#edit-user-name').value.trim();
+        const newEmail = card.querySelector('#edit-user-email').value.trim();
+
+        if (!newName || !newEmail) {
+            alert('請填寫所有欄位');
+            return;
+        }
+        // Basic Email Regex
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(newEmail)) {
+            alert('請輸入有效的 Email 格式');
+            return;
+        }
+
+        try {
             if (isNew) {
-                const idInput = card.querySelector('#edit-user-id');
-                if (idInput) {
-                    userId = idInput.value.trim().toUpperCase();
-                }
-                if (!userId) {
-                    alert('請輸入員工編號');
+                // Check if exists
+                const docRef = doc(db, "users", userId);
+                const docSnap = await getDoc(docRef);
+                if (docSnap.exists()) {
+                    alert('此員工編號已存在');
                     return;
                 }
-                // Check format (optional, e.g. alphanumeric)
-                if (!/^[A-Z0-9]+$/i.test(userId)) {
-                    alert('員工編號只能包含英數字');
-                    return;
-                }
+
+                await setDoc(docRef, {
+                    userId,
+                    userName: newName,
+                    email: newEmail,
+                    createdAt: new Date().toISOString()
+                });
+                alert('新增成功');
+            } else {
+                // Update Firestore
+                await setDoc(doc(db, "users", userId), {
+                    userName: newName,
+                    email: newEmail,
+                    // Preserve createdAt? setDoc(..., {merge: true}) will preserve it.
+                }, { merge: true });
+                alert('儲存成功');
             }
 
-            const newName = card.querySelector('#edit-user-name').value.trim();
-            const newEmail = card.querySelector('#edit-user-email').value.trim();
+            renderUserManagement();
 
-            if (!newName || !newEmail) {
-                alert('請填寫所有欄位');
-                return;
-            }
-            // Basic Email Regex
-            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-            if (!emailRegex.test(newEmail)) {
-                alert('請輸入有效的 Email 格式');
-                return;
-            }
+        } catch (e) {
+            console.error(e);
+            alert('儲存失敗: ' + e.message);
+        }
+    };
 
-            try {
-                if (isNew) {
-                    // Check if exists
-                    const docRef = doc(db, "users", userId);
-                    const docSnap = await getDoc(docRef);
-                    if (docSnap.exists()) {
-                        alert('此員工編號已存在');
-                        return;
-                    }
+    workspace.innerHTML = '';
+    workspace.appendChild(card);
+}
 
-                    await setDoc(docRef, {
-                        userId,
-                        userName: newName,
-                        email: newEmail,
-                        createdAt: new Date().toISOString()
-                    });
-                    alert('新增成功');
-                } else {
-                    // Update Firestore
-                    await setDoc(doc(db, "users", userId), {
-                        userName: newName,
-                        email: newEmail,
-                        // Preserve createdAt? setDoc(..., {merge: true}) will preserve it.
-                    }, { merge: true });
-                    alert('儲存成功');
-                }
+function renderEditor(course) {
+    // Clone course to avoid mutating local state before save (optional preference, but good for "Cancel")
+    // For simplicity here, we edit a local copy and push on save.
+    let editingCourse = JSON.parse(JSON.stringify(course));
 
-                renderUserManagement();
+    const workspace = container.querySelector('#admin-workspace');
+    workspace.innerHTML = '';
 
-            } catch (e) {
-                console.error(e);
-                alert('儲存失敗: ' + e.message);
-            }
-        };
+    // Determine if creating new
+    const isNew = !course.id;
 
-        workspace.innerHTML = '';
-        workspace.appendChild(card);
-    }
+    const editorCard = document.createElement('div');
+    editorCard.style.background = 'white';
+    editorCard.style.padding = '2rem';
+    editorCard.style.boxShadow = '0 4px 10px rgba(0,0,0,0.05)';
 
-    function renderEditor(course) {
-        // Clone course to avoid mutating local state before save (optional preference, but good for "Cancel")
-        // For simplicity here, we edit a local copy and push on save.
-        let editingCourse = JSON.parse(JSON.stringify(course));
-
-        const workspace = container.querySelector('#admin-workspace');
-        workspace.innerHTML = '';
-
-        // Determine if creating new
-        const isNew = !course.id;
-
-        const editorCard = document.createElement('div');
-        editorCard.style.background = 'white';
-        editorCard.style.padding = '2rem';
-        editorCard.style.boxShadow = '0 4px 10px rgba(0,0,0,0.05)';
-
-        editorCard.innerHTML = `
+    editorCard.innerHTML = `
             <div class="flex justify-between items-center mb-4">
                 <h2>${isNew ? '新增課程' : '編輯課程'}</h2>
                 <button class="btn" id="btn-back-list" style="background-color: #6c757d;">&larr; 返回列表</button>
@@ -2976,17 +3137,17 @@ function renderAdmin() {
         </div>
                     `;
 
-        const unitContainer = editorCard.querySelector('#unit-list-container');
-        const renderUnits = () => {
-            unitContainer.innerHTML = '';
-            let videoCount = 0;
-            (editingCourse.parts || []).forEach((part, idx) => {
-                if (part.type === 'video') videoCount++;
-                const isQuiz = part.type === 'quiz';
-                const row = document.createElement('div');
-                row.style.cssText = `background: var(--light-gray); padding: 1rem; margin-bottom: 1rem; border-left: 4px solid ${isQuiz ? '#ff6b6b' : (editingCourse.color || '#0ABAB5')}`;
+    const unitContainer = editorCard.querySelector('#unit-list-container');
+    const renderUnits = () => {
+        unitContainer.innerHTML = '';
+        let videoCount = 0;
+        (editingCourse.parts || []).forEach((part, idx) => {
+            if (part.type === 'video') videoCount++;
+            const isQuiz = part.type === 'quiz';
+            const row = document.createElement('div');
+            row.style.cssText = `background: var(--light-gray); padding: 1rem; margin-bottom: 1rem; border-left: 4px solid ${isQuiz ? '#ff6b6b' : (editingCourse.color || '#0ABAB5')}`;
 
-                row.innerHTML = `
+            row.innerHTML = `
                         <div class="flex justify-between items-center mb-2">
                         <h5 style="margin:0;"><span style="background:${isQuiz ? '#ff6b6b' : '#666'}; color:white; padding:2px 6px; border-radius:4px; font-size:0.8rem; margin-right:8px;">${isQuiz ? '測驗' : '影片單元'}</span>${part.title}</h5>
                         <button class="btn btn-danger delete-unit-btn" data-idx="${idx}" style="padding: 4px 8px; font-size: 0.8rem;">刪除</button>
@@ -3016,197 +3177,197 @@ function renderAdmin() {
                             </div>
                         </div>
                     `;
-                unitContainer.appendChild(row);
-            });
+            unitContainer.appendChild(row);
+        });
 
-            // Bind inputs
-            unitContainer.querySelectorAll('.unit-title-input').forEach(i => i.oninput = (e) => editingCourse.parts[e.target.dataset.idx].title = e.target.value);
-            unitContainer.querySelectorAll('.unit-url-input').forEach(i => i.oninput = (e) => editingCourse.parts[e.target.dataset.idx].url = e.target.value);
-            unitContainer.querySelectorAll('.unit-code-input').forEach(i => i.oninput = (e) => editingCourse.parts[e.target.dataset.idx].verificationCode = e.target.value);
+        // Bind inputs
+        unitContainer.querySelectorAll('.unit-title-input').forEach(i => i.oninput = (e) => editingCourse.parts[e.target.dataset.idx].title = e.target.value);
+        unitContainer.querySelectorAll('.unit-url-input').forEach(i => i.oninput = (e) => editingCourse.parts[e.target.dataset.idx].url = e.target.value);
+        unitContainer.querySelectorAll('.unit-code-input').forEach(i => i.oninput = (e) => editingCourse.parts[e.target.dataset.idx].verificationCode = e.target.value);
 
-            // Bind instruction toggles
-            unitContainer.querySelectorAll('.toggle-quiz-instruction').forEach(btn => {
-                btn.onclick = (e) => {
-                    e.preventDefault();
-                    const container = e.target.closest('div').parentElement;
-                    const box = container.querySelector('.quiz-instruction-box');
-                    if (box) {
-                        const isHidden = box.style.display === 'none';
-                        box.style.display = isHidden ? 'block' : 'none';
-                        e.target.textContent = isHidden ? '隱藏設定說明' : '如何設定驗證碼?';
-                    }
-                };
-            });
-
-            unitContainer.querySelectorAll('.delete-unit-btn').forEach(btn => btn.onclick = (e) => {
-                editingCourse.parts.splice(e.target.dataset.idx, 1);
-                renderUnits();
-            });
-        };
-
-        renderUnits();
-
-        // Editor Bindings
-        editorCard.querySelector('#edit-title').oninput = (e) => editingCourse.title = e.target.value;
-        editorCard.querySelector('#edit-start').oninput = (e) => editingCourse.startDate = e.target.value;
-        editorCard.querySelector('#edit-end').oninput = (e) => editingCourse.endDate = e.target.value;
-        editorCard.querySelector('#edit-actual-start').oninput = (e) => editingCourse.actualStartDate = e.target.value;
-        editorCard.querySelector('#edit-actual-end').oninput = (e) => editingCourse.actualEndDate = e.target.value;
-        editorCard.querySelector('#edit-course-hours').oninput = (e) => editingCourse.courseHours = parseFloat(e.target.value) || null;
-        editorCard.querySelector('#edit-color').oninput = (e) => { editingCourse.color = e.target.value; renderUnits(); };
-        editorCard.querySelector('#user-permission-toggle').onchange = (e) => {
-            const container = editorCard.querySelector('#permission-input-container');
-            container.style.display = e.target.checked ? 'block' : 'none';
-        };
-
-        editorCard.querySelector('#edit-permissions').oninput = (e) => {
-            const val = e.target.value;
-            // Split by comma, trim, and remove empty strings
-            editingCourse.allowedUserIds = val.split(/[,，\n]/).map(s => s.trim()).filter(s => s);
-        };
-
-        // --- Batch Import Logic ---
-
-        // 1. Trigger File Input
-        editorCard.querySelector('#btn-import-permissions').onclick = () => {
-            editorCard.querySelector('#permission-file-input').click();
-        };
-
-        // 2. Handle File Selection
-        editorCard.querySelector('#permission-file-input').onchange = (e) => {
-            const file = e.target.files[0];
-            if (!file) return;
-
-            const reader = new FileReader();
-            reader.onload = (event) => {
-                const text = event.target.result;
-
-                // 1. Split by newlines first to handle header
-                let lines = text.split(/\r?\n/);
-
-                // 2. Filter out header if it contains specific keywords
-                if (lines.length > 0 && (lines[0].includes('員工編號') || lines[0].includes('Employee ID'))) {
-                    lines.shift(); // Remove first line
+        // Bind instruction toggles
+        unitContainer.querySelectorAll('.toggle-quiz-instruction').forEach(btn => {
+            btn.onclick = (e) => {
+                e.preventDefault();
+                const container = e.target.closest('div').parentElement;
+                const box = container.querySelector('.quiz-instruction-box');
+                if (box) {
+                    const isHidden = box.style.display === 'none';
+                    box.style.display = isHidden ? 'block' : 'none';
+                    e.target.textContent = isHidden ? '隱藏設定說明' : '如何設定驗證碼?';
                 }
-
-                // 3. Join remaining lines and parse IDs
-                // Parse IDs: split by newlines or commas, remove quotes if CSV
-                const remainingText = lines.join('\n');
-                let ids = remainingText.split(/[\r\n,]+/)
-                    .map(id => id.trim().replace(/^['"]|['"]$/g, '')) // remove surrounding quotes
-                    .filter(id => id && !id.includes('員工編號') && !id.includes('Employee ID')); // Double check filter
-
-                if (ids.length > 0) {
-                    // Merge with existing or overwrite? Let's Merge and Deduplicate for better UX
-                    const currentIds = editingCourse.allowedUserIds || [];
-                    const newSet = new Set([...currentIds, ...ids]);
-                    editingCourse.allowedUserIds = Array.from(newSet);
-
-                    // Update UI
-                    editorCard.querySelector('#edit-permissions').value = editingCourse.allowedUserIds.join(', ');
-                    alert(`已匯入 ${ids.length} 筆資料`);
-                } else {
-                    alert('檔案中未找到有效資料');
-                }
-                // Reset input
-                e.target.value = '';
             };
-            reader.readAsText(file);
-        };
+        });
 
-        // 3. Download Example
-        editorCard.querySelector('#btn-download-example').onclick = () => {
-            // Add BOM for Excel to open UTF-8 correctly
-            const bom = "\uFEFF";
-            const exampleContent = bom + "員工編號 (Employee ID)\nEMP001\nEMP002\nEMP003";
-            const blob = new Blob([exampleContent], { type: 'text/csv;charset=utf-8;' });
-            const url = URL.createObjectURL(blob);
-            const link = document.createElement('a');
-            link.setAttribute('href', url);
-            link.setAttribute('download', 'permission_import_example.csv');
-            link.style.visibility = 'hidden';
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-        };
-        // --------------------------
-
-        // Add Units
-        editorCard.querySelector('#btn-add-video').onclick = () => {
-            const vCount = editingCourse.parts.filter(p => p.type === 'video').length;
-            editingCourse.parts.push({ type: 'video', title: `單元 ${vCount + 1} `, url: '' });
+        unitContainer.querySelectorAll('.delete-unit-btn').forEach(btn => btn.onclick = (e) => {
+            editingCourse.parts.splice(e.target.dataset.idx, 1);
             renderUnits();
+        });
+    };
+
+    renderUnits();
+
+    // Editor Bindings
+    editorCard.querySelector('#edit-title').oninput = (e) => editingCourse.title = e.target.value;
+    editorCard.querySelector('#edit-start').oninput = (e) => editingCourse.startDate = e.target.value;
+    editorCard.querySelector('#edit-end').oninput = (e) => editingCourse.endDate = e.target.value;
+    editorCard.querySelector('#edit-actual-start').oninput = (e) => editingCourse.actualStartDate = e.target.value;
+    editorCard.querySelector('#edit-actual-end').oninput = (e) => editingCourse.actualEndDate = e.target.value;
+    editorCard.querySelector('#edit-course-hours').oninput = (e) => editingCourse.courseHours = parseFloat(e.target.value) || null;
+    editorCard.querySelector('#edit-color').oninput = (e) => { editingCourse.color = e.target.value; renderUnits(); };
+    editorCard.querySelector('#user-permission-toggle').onchange = (e) => {
+        const container = editorCard.querySelector('#permission-input-container');
+        container.style.display = e.target.checked ? 'block' : 'none';
+    };
+
+    editorCard.querySelector('#edit-permissions').oninput = (e) => {
+        const val = e.target.value;
+        // Split by comma, trim, and remove empty strings
+        editingCourse.allowedUserIds = val.split(/[,，\n]/).map(s => s.trim()).filter(s => s);
+    };
+
+    // --- Batch Import Logic ---
+
+    // 1. Trigger File Input
+    editorCard.querySelector('#btn-import-permissions').onclick = () => {
+        editorCard.querySelector('#permission-file-input').click();
+    };
+
+    // 2. Handle File Selection
+    editorCard.querySelector('#permission-file-input').onchange = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = (event) => {
+            const text = event.target.result;
+
+            // 1. Split by newlines first to handle header
+            let lines = text.split(/\r?\n/);
+
+            // 2. Filter out header if it contains specific keywords
+            if (lines.length > 0 && (lines[0].includes('員工編號') || lines[0].includes('Employee ID'))) {
+                lines.shift(); // Remove first line
+            }
+
+            // 3. Join remaining lines and parse IDs
+            // Parse IDs: split by newlines or commas, remove quotes if CSV
+            const remainingText = lines.join('\n');
+            let ids = remainingText.split(/[\r\n,]+/)
+                .map(id => id.trim().replace(/^['"]|['"]$/g, '')) // remove surrounding quotes
+                .filter(id => id && !id.includes('員工編號') && !id.includes('Employee ID')); // Double check filter
+
+            if (ids.length > 0) {
+                // Merge with existing or overwrite? Let's Merge and Deduplicate for better UX
+                const currentIds = editingCourse.allowedUserIds || [];
+                const newSet = new Set([...currentIds, ...ids]);
+                editingCourse.allowedUserIds = Array.from(newSet);
+
+                // Update UI
+                editorCard.querySelector('#edit-permissions').value = editingCourse.allowedUserIds.join(', ');
+                alert(`已匯入 ${ids.length} 筆資料`);
+            } else {
+                alert('檔案中未找到有效資料');
+            }
+            // Reset input
+            e.target.value = '';
         };
-        editorCard.querySelector('#btn-add-quiz').onclick = () => {
-            editingCourse.parts.push({ type: 'quiz', title: '課後測驗', url: '' });
-            renderUnits();
-        };
+        reader.readAsText(file);
+    };
+
+    // 3. Download Example
+    editorCard.querySelector('#btn-download-example').onclick = () => {
+        // Add BOM for Excel to open UTF-8 correctly
+        const bom = "\uFEFF";
+        const exampleContent = bom + "員工編號 (Employee ID)\nEMP001\nEMP002\nEMP003";
+        const blob = new Blob([exampleContent], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.setAttribute('href', url);
+        link.setAttribute('download', 'permission_import_example.csv');
+        link.style.visibility = 'hidden';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    };
+    // --------------------------
+
+    // Add Units
+    editorCard.querySelector('#btn-add-video').onclick = () => {
+        const vCount = editingCourse.parts.filter(p => p.type === 'video').length;
+        editingCourse.parts.push({ type: 'video', title: `單元 ${vCount + 1} `, url: '' });
+        renderUnits();
+    };
+    editorCard.querySelector('#btn-add-quiz').onclick = () => {
+        editingCourse.parts.push({ type: 'quiz', title: '課後測驗', url: '' });
+        renderUnits();
+    };
 
 
-        // Actions
-        // Fix: Use renderCourseList, as renderList is not defined in this scope
-        const goBack = () => renderCourseList();
-        editorCard.querySelector('#btn-back-list').onclick = goBack;
-        editorCard.querySelector('#btn-cancel').onclick = goBack;
+    // Actions
+    // Fix: Use renderCourseList, as renderList is not defined in this scope
+    const goBack = () => renderCourseList();
+    editorCard.querySelector('#btn-back-list').onclick = goBack;
+    editorCard.querySelector('#btn-cancel').onclick = goBack;
 
-        // SAVE TO FIREBASE
-        editorCard.querySelector('#btn-save').onclick = async () => {
-            try {
-                if (confirm('確定要儲存變更嗎？')) {
-                    // Check toggle state
-                    const isRestricted = editorCard.querySelector('#user-permission-toggle').checked;
-                    if (!isRestricted) {
-                        editingCourse.allowedUserIds = [];
-                    }
-
-                    if (isNew) {
-                        // CREATE
-                        await addDoc(collection(db, "courses"), editingCourse);
-                    } else {
-                        // UPDATE
-                        // Remove ID from object before saving (updateDoc takes ID separately)
-                        const { id, ...dataToSave } = editingCourse;
-                        await updateDoc(doc(db, "courses", course.id), dataToSave);
-                    }
-
-                    await fetchCourses(); // Refresh local
-                    alert('儲存成功！');
-                    renderCourseList();
+    // SAVE TO FIREBASE
+    editorCard.querySelector('#btn-save').onclick = async () => {
+        try {
+            if (confirm('確定要儲存變更嗎？')) {
+                // Check toggle state
+                const isRestricted = editorCard.querySelector('#user-permission-toggle').checked;
+                if (!isRestricted) {
+                    editingCourse.allowedUserIds = [];
                 }
-            } catch (e) {
-                console.error(e);
-                alert('儲存失敗: ' + e.message);
+
+                if (isNew) {
+                    // CREATE
+                    await addDoc(collection(db, "courses"), editingCourse);
+                } else {
+                    // UPDATE
+                    // Remove ID from object before saving (updateDoc takes ID separately)
+                    const { id, ...dataToSave } = editingCourse;
+                    await updateDoc(doc(db, "courses", course.id), dataToSave);
+                }
+
+                await fetchCourses(); // Refresh local
+                alert('儲存成功！');
+                renderCourseList();
             }
-        };
+        } catch (e) {
+            console.error(e);
+            alert('儲存失敗: ' + e.message);
+        }
+    };
 
-        workspace.appendChild(editorCard);
-    }
+    workspace.appendChild(editorCard);
+}
 
-    // Export Dialog
-    function showExportDialog() {
-        const modal = document.createElement('div');
-        modal.style.cssText = 'position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); display: flex; justify-content: center; align-items: center; z-index: 9999;';
+// Export Dialog
+function showExportDialog() {
+    const modal = document.createElement('div');
+    modal.style.cssText = 'position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); display: flex; justify-content: center; align-items: center; z-index: 9999;';
 
-        const dialog = document.createElement('div');
-        dialog.style.cssText = 'background: white; padding: 2rem; border-radius: 8px; max-width: 600px; width: 90%; max-height: 80vh; overflow-y: auto;';
+    const dialog = document.createElement('div');
+    dialog.style.cssText = 'background: white; padding: 2rem; border-radius: 8px; max-width: 600px; width: 90%; max-height: 80vh; overflow-y: auto;';
 
-        // 1. Get Unique Years
-        const years = Array.from(new Set(courses.map(c => {
-            if (!c.startDate) return '未設定';
+    // 1. Get Unique Years
+    const years = Array.from(new Set(courses.map(c => {
+        if (!c.startDate) return '未設定';
+        try {
+            return new Date(c.startDate).getFullYear().toString();
+        } catch (e) { return '未設定'; }
+    }))).sort().reverse();
+
+    // 2. Build course selection options with data-year attribute
+    let courseOptionsHTML = courses.map(course => {
+        let year = '未設定';
+        if (course.startDate) {
             try {
-                return new Date(c.startDate).getFullYear().toString();
-            } catch (e) { return '未設定'; }
-        }))).sort().reverse();
-
-        // 2. Build course selection options with data-year attribute
-        let courseOptionsHTML = courses.map(course => {
-            let year = '未設定';
-            if (course.startDate) {
-                try {
-                    year = new Date(course.startDate).getFullYear().toString();
-                } catch (e) { }
-            }
-            return `
+                year = new Date(course.startDate).getFullYear().toString();
+            } catch (e) { }
+        }
+        return `
                 <div class="course-option-wrapper" data-year="${year}">
                     <label style="display: block; margin-bottom: 0.75rem; cursor: pointer;">
                         <input type="checkbox" class="export-course" value="${course.id}" checked>
@@ -3218,9 +3379,9 @@ function renderAdmin() {
                     </label>
                 </div>
             `;
-        }).join('');
+    }).join('');
 
-        dialog.innerHTML = `
+    dialog.innerHTML = `
             <div style="margin-bottom: 1.5rem;">
                 <h2 style="margin: 0 0 0.5rem 0;">匯出課程紀錄</h2>
                 <p style="color: #666; font-size: 0.9rem;">請選擇要匯出的課程與欄位</p>
@@ -3305,258 +3466,526 @@ function renderAdmin() {
             </div>
                     `;
 
-        modal.appendChild(dialog);
-        document.body.appendChild(modal);
+    modal.appendChild(dialog);
+    document.body.appendChild(modal);
 
-        // Close handlers
-        const closeModal = () => document.body.removeChild(modal);
-        modal.onclick = (e) => { if (e.target === modal) closeModal(); };
-        dialog.querySelector('#btn-cancel-export').onclick = closeModal;
+    // Close handlers
+    const closeModal = () => document.body.removeChild(modal);
+    modal.onclick = (e) => { if (e.target === modal) closeModal(); };
+    dialog.querySelector('#btn-cancel-export').onclick = closeModal;
 
-        // Year Filter Logic
-        const filterSelect = dialog.querySelector('#export-year-filter');
-        const courseWrappers = dialog.querySelectorAll('.course-option-wrapper');
+    // Year Filter Logic
+    const filterSelect = dialog.querySelector('#export-year-filter');
+    const courseWrappers = dialog.querySelectorAll('.course-option-wrapper');
 
-        filterSelect.onchange = (e) => {
-            const selectedYear = e.target.value;
-            courseWrappers.forEach(wrapper => {
-                if (selectedYear === 'all' || wrapper.dataset.year === selectedYear) {
-                    wrapper.style.display = 'block';
-                } else {
-                    wrapper.style.display = 'none';
-                }
-            });
-        };
-
-        // Course selection handlers
-        dialog.querySelector('#btn-select-all-courses').onclick = () => {
-            // Only select visible
-            let visibleCount = 0;
-            courseWrappers.forEach(wrapper => {
-                if (wrapper.style.display !== 'none') {
-                    const cb = wrapper.querySelector('.export-course');
-                    cb.checked = true;
-                    visibleCount++;
-                }
-            });
-        };
-        dialog.querySelector('#btn-deselect-all-courses').onclick = () => {
-            // Only deselect visible
-            courseWrappers.forEach(wrapper => {
-                if (wrapper.style.display !== 'none') {
-                    const cb = wrapper.querySelector('.export-course');
-                    cb.checked = false;
-                }
-            });
-        };
-
-        // Export handler
-        dialog.querySelector('#btn-confirm-export').onclick = async () => {
-            const selectedCourses = [];
-            dialog.querySelectorAll('.export-course:checked').forEach(cb => {
-                selectedCourses.push(cb.value);
-            });
-
-            if (selectedCourses.length === 0) {
-                alert('請至少選擇一個課程');
-                return;
+    filterSelect.onchange = (e) => {
+        const selectedYear = e.target.value;
+        courseWrappers.forEach(wrapper => {
+            if (selectedYear === 'all' || wrapper.dataset.year === selectedYear) {
+                wrapper.style.display = 'block';
+            } else {
+                wrapper.style.display = 'none';
             }
+        });
+    };
 
-            const selectedFields = [];
-            dialog.querySelectorAll('.export-field:checked').forEach(cb => {
-                selectedFields.push(cb.value);
-            });
-
-            if (selectedFields.length === 0) {
-                alert('請至少選擇一個欄位');
-                return;
+    // Course selection handlers
+    dialog.querySelector('#btn-select-all-courses').onclick = () => {
+        // Only select visible
+        let visibleCount = 0;
+        courseWrappers.forEach(wrapper => {
+            if (wrapper.style.display !== 'none') {
+                const cb = wrapper.querySelector('.export-course');
+                cb.checked = true;
+                visibleCount++;
             }
-
-            // Show loading
-            const btn = dialog.querySelector('#btn-confirm-export');
-            btn.textContent = '匯出中...';
-            btn.disabled = true;
-
-            try {
-                await exportProgressToCSV(selectedFields, selectedCourses);
-                closeModal();
-            } catch (e) {
-                alert('匯出失敗: ' + e.message);
-                btn.textContent = '確定匯出';
-                btn.disabled = false;
+        });
+    };
+    dialog.querySelector('#btn-deselect-all-courses').onclick = () => {
+        // Only deselect visible
+        courseWrappers.forEach(wrapper => {
+            if (wrapper.style.display !== 'none') {
+                const cb = wrapper.querySelector('.export-course');
+                cb.checked = false;
             }
-        };
-    }
+        });
+    };
 
-    // Export to CSV function
-    async function exportProgressToCSV(selectedFields, selectedCourseIds) {
-        // Get all progress data
-        const allProgress = await getAllProgress();
+    // Export handler
+    dialog.querySelector('#btn-confirm-export').onclick = async () => {
+        const selectedCourses = [];
+        dialog.querySelectorAll('.export-course:checked').forEach(cb => {
+            selectedCourses.push(cb.value);
+        });
 
-        // Filter by selected courses
-        const filteredProgress = allProgress.filter(progress =>
-            selectedCourseIds.includes(progress.courseId)
-        );
-
-        if (filteredProgress.length === 0) {
-            alert('所選課程目前沒有任何學習紀錄可以匯出');
+        if (selectedCourses.length === 0) {
+            alert('請至少選擇一個課程');
             return;
         }
 
-        // Build CSV headers
-        const headers = [];
-        const fieldMap = {
-            'userId': '員工編號',
-            'userName': '姓名',
-            'courseName': '課程名稱',
-            'status': '學習狀態',
-            'completionRate': '完成度(%)',
-            'completedUnits': '已完成單元數',
-            'totalUnits': '總單元數',
-            'updatedAt': '最後學習時間'
-        };
+        const selectedFields = [];
+        dialog.querySelectorAll('.export-field:checked').forEach(cb => {
+            selectedFields.push(cb.value);
+        });
+
+        if (selectedFields.length === 0) {
+            alert('請至少選擇一個欄位');
+            return;
+        }
+
+        // Show loading
+        const btn = dialog.querySelector('#btn-confirm-export');
+        btn.textContent = '匯出中...';
+        btn.disabled = true;
+
+        try {
+            await exportProgressToCSV(selectedFields, selectedCourses);
+            closeModal();
+        } catch (e) {
+            alert('匯出失敗: ' + e.message);
+            btn.textContent = '確定匯出';
+            btn.disabled = false;
+        }
+    };
+}
+
+// Export to CSV function
+async function exportProgressToCSV(selectedFields, selectedCourseIds) {
+    // Get all progress data
+    const allProgress = await getAllProgress();
+
+    // Filter by selected courses
+    const filteredProgress = allProgress.filter(progress =>
+        selectedCourseIds.includes(progress.courseId)
+    );
+
+    if (filteredProgress.length === 0) {
+        alert('所選課程目前沒有任何學習紀錄可以匯出');
+        return;
+    }
+
+    // Build CSV headers
+    const headers = [];
+    const fieldMap = {
+        'userId': '員工編號',
+        'userName': '姓名',
+        'courseName': '課程名稱',
+        'status': '學習狀態',
+        'completionRate': '完成度(%)',
+        'completedUnits': '已完成單元數',
+        'totalUnits': '總單元數',
+        'updatedAt': '最後學習時間'
+    };
+
+    selectedFields.forEach(field => {
+        if (fieldMap[field]) {
+            headers.push(fieldMap[field]);
+        }
+    });
+
+    // Prepare rows
+    const rows = [];
+
+    // Check if we need unit details
+    const needUnitDetails = selectedFields.includes('unitDetails');
+    const needUnitProgress = selectedFields.includes('unitProgress');
+    const needViewCount = selectedFields.includes('viewCount');
+
+    // Find max unit count for header alignment
+    let maxUnits = 0;
+    if (needUnitDetails || needUnitProgress || needViewCount) {
+        filteredProgress.forEach(progress => {
+            const unitCount = progress.units?.length || 0;
+            if (unitCount > maxUnits) maxUnits = unitCount;
+        });
+    }
+
+    // Add unit headers if needed
+    if (needUnitDetails) {
+        for (let i = 0; i < maxUnits; i++) {
+            headers.push(`單元${i + 1} _完成狀態`);
+        }
+    }
+    if (needUnitProgress) {
+        for (let i = 0; i < maxUnits; i++) {
+            headers.push(`單元${i + 1} _觀看進度(%)`);
+        }
+    }
+    if (needViewCount) {
+        for (let i = 0; i < maxUnits; i++) {
+            headers.push(`單元${i + 1} _觀看次數`);
+        }
+    }
+
+    rows.push(headers);
+
+    // Build data rows
+    filteredProgress.forEach(progress => {
+        const row = [];
 
         selectedFields.forEach(field => {
-            if (fieldMap[field]) {
-                headers.push(fieldMap[field]);
+            if (field === 'userId') {
+                row.push(progress.userId || '');
+            } else if (field === 'userName') {
+                row.push(progress.userName || '');
+            } else if (field === 'courseName') {
+                row.push(progress.courseName || '');
+            } else if (field === 'status') {
+                const statusText = progress.status === 'completed' ? '已完成' :
+                    progress.status === 'in-progress' ? '學習中' : '未開始';
+                row.push(statusText);
+            } else if (field === 'completionRate') {
+                row.push(progress.completionRate || 0);
+            } else if (field === 'completedUnits') {
+                const completed = progress.units?.filter(u => u.completed || u.quizCompleted).length || 0;
+                row.push(completed);
+            } else if (field === 'totalUnits') {
+                row.push(progress.units?.length || 0);
+            } else if (field === 'updatedAt') {
+                const date = progress.updatedAt ? new Date(progress.updatedAt).toLocaleString('zh-TW') : '';
+                row.push(date);
             }
         });
 
-        // Prepare rows
-        const rows = [];
-
-        // Check if we need unit details
-        const needUnitDetails = selectedFields.includes('unitDetails');
-        const needUnitProgress = selectedFields.includes('unitProgress');
-        const needViewCount = selectedFields.includes('viewCount');
-
-        // Find max unit count for header alignment
-        let maxUnits = 0;
-        if (needUnitDetails || needUnitProgress || needViewCount) {
-            filteredProgress.forEach(progress => {
-                const unitCount = progress.units?.length || 0;
-                if (unitCount > maxUnits) maxUnits = unitCount;
-            });
-        }
-
-        // Add unit headers if needed
+        // Add unit details
         if (needUnitDetails) {
             for (let i = 0; i < maxUnits; i++) {
-                headers.push(`單元${i + 1} _完成狀態`);
+                const unit = progress.units?.[i];
+                if (unit) {
+                    const isCompleted = unit.completed || unit.quizCompleted;
+                    row.push(isCompleted ? '已完成' : '未完成');
+                } else {
+                    row.push('');
+                }
             }
         }
+
         if (needUnitProgress) {
             for (let i = 0; i < maxUnits; i++) {
-                headers.push(`單元${i + 1} _觀看進度(%)`);
+                const unit = progress.units?.[i];
+                if (unit && unit.duration > 0) {
+                    const percent = Math.round((unit.lastPosition / unit.duration) * 100);
+                    row.push(percent);
+                } else {
+                    row.push('');
+                }
             }
         }
+
         if (needViewCount) {
             for (let i = 0; i < maxUnits; i++) {
-                headers.push(`單元${i + 1} _觀看次數`);
+                const unit = progress.units?.[i];
+                row.push(unit?.viewCount || 0);
             }
         }
 
-        rows.push(headers);
+        rows.push(row);
+    });
 
-        // Build data rows
-        filteredProgress.forEach(progress => {
-            const row = [];
-
-            selectedFields.forEach(field => {
-                if (field === 'userId') {
-                    row.push(progress.userId || '');
-                } else if (field === 'userName') {
-                    row.push(progress.userName || '');
-                } else if (field === 'courseName') {
-                    row.push(progress.courseName || '');
-                } else if (field === 'status') {
-                    const statusText = progress.status === 'completed' ? '已完成' :
-                        progress.status === 'in-progress' ? '學習中' : '未開始';
-                    row.push(statusText);
-                } else if (field === 'completionRate') {
-                    row.push(progress.completionRate || 0);
-                } else if (field === 'completedUnits') {
-                    const completed = progress.units?.filter(u => u.completed || u.quizCompleted).length || 0;
-                    row.push(completed);
-                } else if (field === 'totalUnits') {
-                    row.push(progress.units?.length || 0);
-                } else if (field === 'updatedAt') {
-                    const date = progress.updatedAt ? new Date(progress.updatedAt).toLocaleString('zh-TW') : '';
-                    row.push(date);
-                }
-            });
-
-            // Add unit details
-            if (needUnitDetails) {
-                for (let i = 0; i < maxUnits; i++) {
-                    const unit = progress.units?.[i];
-                    if (unit) {
-                        const isCompleted = unit.completed || unit.quizCompleted;
-                        row.push(isCompleted ? '已完成' : '未完成');
-                    } else {
-                        row.push('');
-                    }
-                }
+    // Convert to CSV
+    const csvContent = rows.map(row => {
+        return row.map(cell => {
+            // Escape quotes and wrap in quotes if contains comma or newline
+            const cellStr = String(cell);
+            if (cellStr.includes(',') || cellStr.includes('\n') || cellStr.includes('"')) {
+                return '"' + cellStr.replace(/"/g, '""') + '"';
             }
+            return cellStr;
+        }).join(',');
+    }).join('\n');
 
-            if (needUnitProgress) {
-                for (let i = 0; i < maxUnits; i++) {
-                    const unit = progress.units?.[i];
-                    if (unit && unit.duration > 0) {
-                        const percent = Math.round((unit.lastPosition / unit.duration) * 100);
-                        row.push(percent);
-                    } else {
-                        row.push('');
-                    }
-                }
-            }
+    // Add BOM for Excel UTF-8 support
+    const BOM = '\uFEFF';
+    const blob = new Blob([BOM + csvContent], { type: 'text/csv;charset=utf-8;' });
 
-            if (needViewCount) {
-                for (let i = 0; i < maxUnits; i++) {
-                    const unit = progress.units?.[i];
-                    row.push(unit?.viewCount || 0);
-                }
-            }
+    // Download
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+    link.setAttribute('href', url);
+    link.setAttribute('download', `課程紀錄_${timestamp}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
 
-            rows.push(row);
+    alert('匯出成功！');
+}
+
+
+
+
+async function renderArchives() {
+    const container = document.getElementById('main-container');
+    if (!container) return;
+    renderAdminHeader();
+    const workspace = document.getElementById('admin-workspace');
+    workspace.innerHTML = '<p style="text-align:center; padding:2rem;">讀取封存資料...</p>';
+
+    try {
+        const q = query(collection(db, "users"), where("status", "==", "archived"));
+        const snap = await getDocs(q);
+
+        const list = [];
+        snap.forEach(d => list.push({ id: d.id, ...d.data() }));
+
+        const card = document.createElement('div');
+        card.style.background = 'white';
+        card.style.padding = '2rem';
+        card.style.borderRadius = '8px';
+        card.style.boxShadow = '0 4px 10px rgba(0,0,0,0.05)';
+
+        card.innerHTML = `
+                <h2 style="margin-bottom:1rem;">已封存資料 (${list.length})</h2>
+                <table style="width: 100%; border-collapse: collapse;">
+                    <thead>
+                        <tr style="background: #f8f9fa;">
+                            <th style="padding:1rem;">員工編號</th>
+                            <th style="padding:1rem;">姓名</th>
+                            <th style="padding:1rem;">封存原因</th>
+                            <th style="padding:1rem;">合併至</th>
+                            <th style="padding:1rem;">功能</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${list.map(u => `
+                            <tr style="border-bottom:1px solid #eee;">
+                                <td style="padding:1rem;">${u.userId || u.id}</td>
+                                <td style="padding:1rem;">${u.userName}</td>
+                                <td style="padding:1rem;">${u.archivedReason === 'merged' ? '合併帳號' : '手動刪除'}</td>
+                                <td style="padding:1rem;">${u.mergedTarget || '-'}</td>
+                                <td style="padding:1rem;">
+                                    <button class="btn btn-restore" data-id="${u.id}" style="padding:4px 8px; font-size:0.8rem; background:#28a745; color:white;">復原</button>
+                                </td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+                `;
+
+        card.querySelectorAll('.btn-restore').forEach(btn => {
+            btn.onclick = async () => {
+                if (confirm("確定要復原此帳號嗎？")) restoreUser(btn.dataset.id);
+            };
         });
 
-        // Convert to CSV
-        const csvContent = rows.map(row => {
-            return row.map(cell => {
-                // Escape quotes and wrap in quotes if contains comma or newline
-                const cellStr = String(cell);
-                if (cellStr.includes(',') || cellStr.includes('\n') || cellStr.includes('"')) {
-                    return '"' + cellStr.replace(/"/g, '""') + '"';
-                }
-                return cellStr;
-            }).join(',');
-        }).join('\n');
+        workspace.innerHTML = '';
+        workspace.appendChild(card);
 
-        // Add BOM for Excel UTF-8 support
-        const BOM = '\uFEFF';
-        const blob = new Blob([BOM + csvContent], { type: 'text/csv;charset=utf-8;' });
+    } catch (e) {
+        workspace.innerHTML = `<p style="color:red">Error: ${e.message}</p>`;
+    }
+}
 
-        // Download
-        const link = document.createElement('a');
-        const url = URL.createObjectURL(blob);
-        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
-        link.setAttribute('href', url);
-        link.setAttribute('download', `課程紀錄_${timestamp}.csv`);
-        link.style.visibility = 'hidden';
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
+async function softDeleteUser(userId) {
+    try {
+        await updateDoc(doc(db, "users", userId), {
+            status: 'archived',
+            archivedReason: 'deleted'
+        });
+        alert("已封存。");
+        renderUserManagement();
+    } catch (e) { alert("刪除失敗: " + e.message); }
+}
 
-        alert('匯出成功！');
+async function restoreUser(userId) {
+    try {
+        await updateDoc(doc(db, "users", userId), {
+            status: deleteField(),
+            archivedReason: deleteField(),
+            mergedTarget: deleteField()
+        });
+        alert("已復原。");
+        renderArchives();
+    } catch (e) { alert("復原失敗: " + e.message); }
+}
+
+// Main Render Dispatcher
+async function renderAppV5() {
+    const app = document.getElementById('app');
+    if (!app) return;
+    app.innerHTML = '';
+
+    // 1. Render Navbar (if logged in)
+    if (state.currentUser || state.adminLoggedIn) {
+        const nav = createNavbar();
+        app.appendChild(nav);
     }
 
-    if (state.adminViewMode === 'users') {
-        setTimeout(renderUserManagement, 0);
-    } else if (state.adminViewMode === 'behavior') {
-        setTimeout(renderBehavioralDashboard, 0);
+    // 2. Container for content
+    const container = document.createElement('div');
+    container.id = 'main-container';
+    container.className = 'container';
+    app.appendChild(container);
+
+    // 3. Routing Logic
+    const hash = window.location.hash;
+
+    // Admin View
+    if (state.adminLoggedIn) {
+        // Simple routing for Admin (assuming existing functions handle their own rendering into 'app' or 'workspace')
+        // We usually render a layout first.
+        // For now, based on previous logic, we call the specific renderers.
+        if (state.adminViewMode === 'users') {
+            // Ensure renderUserManagement exists
+            if (typeof renderUserManagement === 'function') renderUserManagement();
+        } else if (state.adminViewMode === 'behavior') {
+            if (typeof renderBehavioralDashboard === 'function') renderBehavioralDashboard();
+        } else if (state.adminViewMode === 'archives') {
+            if (typeof renderArchives === 'function') renderArchives();
+        } else {
+            // Default to Course Management
+            // Check if renderAdminDashboard or renderCourseList exists
+            if (typeof renderCourseList === 'function') renderCourseList();
+            else if (typeof renderHome === 'function') {
+                const home = renderHome();
+                container.appendChild(home);
+            }
+        }
+        return;
+    }
+
+    // Student View
+    if (hash.startsWith('#course/')) {
+        const id = hash.split('/')[1];
+        const view = await renderCourseDetail(id);
+        container.innerHTML = '';
+        container.appendChild(view);
     } else {
-        setTimeout(renderCourseList, 0);
+        // Home (Course List)
+        const home = renderHome();
+        container.innerHTML = '';
+        container.appendChild(home);
     }
-    return container;
+}
+
+
+// --- Password Reset Flow ---
+async function checkActionCode() {
+    const params = new URLSearchParams(window.location.search);
+    const mode = params.get('mode'); // Firebase sends 'mode', 'oobCode', 'apiKey', 'lang'
+    const oobCode = params.get('oobCode');
+
+    // Handle Password Reset
+    if (mode === 'resetPassword' && oobCode) {
+        await handleResetPassword(oobCode);
+        return true;
+    }
+    // You can handle 'verifyEmail' here too if needed
+
+    return false;
+}
+
+async function handleResetPassword(actionCode) {
+    const app = document.getElementById('app');
+    app.innerHTML = ''; // Clear app
+
+    // Render Loading State
+    app.innerHTML = '<div style="text-align:center; padding-top:20%; color:white;"><h3>正在驗證連結...</h3></div>';
+
+    try {
+        // Verify code validity and get email
+        const email = await verifyPasswordResetCode(auth, actionCode);
+
+        // Render Reset Form
+        const container = document.createElement('div');
+        container.className = 'container';
+        container.style.marginTop = '5rem';
+        container.style.maxWidth = '400px';
+
+        container.innerHTML = `
+            <div style="background:white; padding:2rem; border-radius:8px; box-shadow:0 4px 12px rgba(0,0,0,0.1); text-align:center;">
+                <h2 style="margin-bottom:1.5rem;">重設密碼</h2>
+                <p style="color:#666; margin-bottom:1rem;">帳號: <strong>${email}</strong></p>
+                <div style="margin-bottom:1rem; text-align:left;">
+                    <label style="display:block; margin-bottom:0.5rem; color:#666;">新密碼</label>
+                    <input type="password" id="new-password" placeholder="請輸入新密碼 (至少6位)" style="width:100%; padding:10px; border:1px solid #ddd; border-radius:4px;">
+                </div>
+                 <div style="margin-bottom:1.5rem; text-align:left;">
+                    <label style="display:block; margin-bottom:0.5rem; color:#666;">確認新密碼</label>
+                    <input type="password" id="confirm-new-password" placeholder="請再次輸入新密碼" style="width:100%; padding:10px; border:1px solid #ddd; border-radius:4px;">
+                </div>
+                <button id="btn-reset-confirm" class="btn full-width" style="width:100%; background:var(--primary-color); color:white; padding:10px; border:none; border-radius:4px; cursor:pointer;">確認重設</button>
+                <p id="reset-msg" style="color:red; margin-top:1rem; min-height:1.2em;"></p>
+                <div style="margin-top:1rem;">
+                    <a href="/" style="color:#666; text-decoration:none; font-size:0.9rem;">返回登入頁</a>
+                </div>
+            </div>
+        `;
+
+        app.innerHTML = '';
+        app.appendChild(container);
+
+        // Bind Event
+        const btn = document.getElementById('btn-reset-confirm');
+        const msg = document.getElementById('reset-msg');
+        const newPassInput = document.getElementById('new-password');
+        const confirmPassInput = document.getElementById('confirm-new-password');
+
+        btn.onclick = async () => {
+            const newPass = newPassInput.value;
+            const confirmPass = confirmPassInput.value;
+
+            msg.textContent = "";
+
+            if (newPass.length < 6) {
+                msg.textContent = "密碼長度至少需6個字元";
+                return;
+            }
+            if (newPass !== confirmPass) {
+                msg.textContent = "兩次輸入的密碼不一致";
+                return;
+            }
+
+            btn.disabled = true;
+            btn.textContent = "處理中...";
+            btn.style.opacity = "0.7";
+
+            try {
+                await confirmPasswordReset(auth, actionCode, newPass);
+
+                container.innerHTML = `
+                    <div style="background:white; padding:2rem; border-radius:8px; box-shadow:0 4px 12px rgba(0,0,0,0.1); text-align:center;">
+                        <h2 style="color:#4caf50; margin-bottom:1rem;">✅ 密碼重設成功</h2>
+                        <p style="color:#666; margin-bottom:2rem;">您的密碼已更新，請使用新密碼登入。</p>
+                        <button onclick="window.location.href='/'" class="btn full-width" style="width:100%; background:var(--primary-color); color:white; padding:10px; border:none; border-radius:4px; cursor:pointer;">前往登入</button>
+                    </div>
+                `;
+
+                // Clear URL params
+                window.history.replaceState({}, document.title, window.location.pathname);
+
+            } catch (err) {
+                console.error(err);
+                msg.textContent = "重設失敗: " + err.message;
+                btn.disabled = false;
+                btn.textContent = "確認重設";
+                btn.style.opacity = "1";
+            }
+        };
+
+    } catch (err) {
+        console.error(err);
+        app.innerHTML = `
+            <div class="container" style="text-align:center; margin-top:5rem;">
+                <div style="background:white; padding:2rem; border-radius:8px; box-shadow:0 4px 12px rgba(0,0,0,0.1); max-width:400px; margin:0 auto;">
+                    <h2 style="color:#f44336; margin-bottom:1rem;">連結無效或已過期</h2>
+                    <p style="color:#666; margin-bottom:1rem;">此重設密碼連結無效，原因可能是：</p>
+                    <ul style="text-align:left; color:#666; margin-bottom:2rem; padding-left:2rem;">
+                        <li>連結已過期</li>
+                        <li>連結已被使用過</li>
+                    </ul>
+                    <a href="/" class="btn" style="background:var(--primary-color); color:white; padding:10px 20px; text-decoration:none; border-radius:4px;">返回首頁</a>
+                </div>
+            </div>
+        `;
+    }
+}
+
+// Start App
+// Ensure we wait for DOM before running init
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initApp);
+} else {
+    initApp();
 }

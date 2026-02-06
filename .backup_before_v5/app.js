@@ -1,4 +1,4 @@
-import { db, auth, googleProvider, signInWithPopup, signOut, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, sendPasswordResetEmail } from './firebase-config.js';
+import { db } from './firebase-config.js';
 import { collection, getDocs, addDoc, updateDoc, doc, deleteDoc, query, where, setDoc, getDoc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 import { BehavioralTracker } from './behavioral_tracking.js';
 import { MetricsEngine } from './metrics_engine.js';
@@ -9,11 +9,9 @@ const state = {
     courses: [],
     adminLoggedIn: false,
     loading: true,
-    currentUser: null, // v5: { uid, userName, employeeId, email, role, status }
-    adminViewMode: 'courses', // 'courses', 'users', 'archives'
-    adminSortBy: 'openDate',   // 'openDate' or 'actualDate'
-    authInitialized: false,    // v5: Firebase Auth 初始化完成
-    useFirebaseAuth: false     // v5: 啟用 Firebase Auth (漸進式切換開關)
+    currentUser: null, // { userId, userName }
+    adminViewMode: 'courses', // 'courses' or 'users'
+    adminSortBy: 'openDate'   // 'openDate' or 'actualDate'
 };
 
 // YouTube Player Management
@@ -184,240 +182,10 @@ function canUserViewCourse(course, userId) {
     return course.allowedUserIds.includes(userId);
 }
 
-// ============== V5 AUTH MANAGER ==============
-const AuthManager = {
-    init: () => {
-        onAuthStateChanged(auth, async (user) => {
-            if (user) {
-                console.log('[v5 Auth] User detected:', user.uid);
-                await AuthManager.handleUserLogin(user);
-            } else {
-                console.log('[v5 Auth] No user.');
-                if (state.useFirebaseAuth) {
-                    state.currentUser = null;
-                    state.adminLoggedIn = false;
-                    state.authInitialized = true;
-                    handleRoute();
-                }
-            }
-        });
-    },
-
-    handleUserLogin: async (firebaseUser) => {
-        if (!state.useFirebaseAuth) return; // 若未啟用 v5，跳過
-
-        try {
-            state.loading = true;
-            const userRef = doc(db, "users", firebaseUser.uid);
-            const userSnap = await getDoc(userRef);
-
-            let userData = null;
-
-            if (userSnap.exists()) {
-                userData = userSnap.data();
-
-                // ✨ 檢查是否已封存
-                if (userData.status === 'archived') {
-                    const reason = userData.archivedReason === 'merged'
-                        ? '此帳號已被合併至其他帳號'
-                        : '此帳號已被停用';
-                    alert(reason + '。如有疑問請聯絡管理員。');
-                    await signOut(auth);
-                    state.loading = false;
-                    return;
-                }
-            } else {
-                // 新使用者首次登入
-                userData = {
-                    email: firebaseUser.email,
-                    userName: firebaseUser.displayName || '',
-                    photoURL: firebaseUser.photoURL || '',
-                    createdAt: new Date().toISOString(),
-                    status: 'active',
-                    role: 'user',
-                    employeeId: '' // 尚未綁定
-                };
-                await setDoc(userRef, userData);
-            }
-
-            // 更新 State
-            state.currentUser = { uid: firebaseUser.uid, ...userData };
-
-            // 檢查管理員權限
-            if (userData.role === 'admin') {
-                state.adminLoggedIn = true;
-            }
-
-            state.authInitialized = true;
-            state.loading = false;
-
-            // ✨ 檢查是否需要強制綁定編號
-            if (!userData.employeeId) {
-                console.log('[v5 Auth] No Employee ID, triggering binding...');
-                AuthManager.showMandatoryBindingModal(firebaseUser.uid);
-            } else {
-                await fetchCourses();
-                handleRoute();
-            }
-
-        } catch (e) {
-            console.error('[v5 Auth] Login handling error:', e);
-            state.loading = false;
-            alert('登入處理發生錯誤: ' + e.message);
-        }
-    },
-
-    loginWithGoogle: async () => {
-        try {
-            await signInWithPopup(auth, googleProvider);
-        } catch (error) {
-            console.error(error);
-            if (error.code === 'auth/account-exists-with-different-credential') {
-                alert('此 Email 已使用其他方式（如密碼）登入過，請使用該方式登入。');
-            } else {
-                alert('Google 登入失敗: ' + error.message);
-            }
-        }
-    },
-
-    loginWithEmail: async (email, password) => {
-        try {
-            await signInWithEmailAndPassword(auth, email, password);
-        } catch (error) {
-            console.error(error);
-            alert('登入失敗: ' + error.message);
-        }
-    },
-
-    resetPassword: async (email) => {
-        try {
-            await sendPasswordResetEmail(auth, email);
-            alert(`已發送重設密碼信至 ${email}，請查收信件並設定新密碼。`);
-        } catch (e) {
-            console.error(e);
-            alert('發送失敗: ' + e.message);
-        }
-    },
-
-    // ✨ 管理員邀請學員 (使用 Secondary App)
-    createUserAsAdmin: async (email, name) => {
-        const secondaryApp = window.secondaryFirebaseApp ||
-            (await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js")).initializeApp({
-                apiKey: "AIzaSyBwQ8SNvJ_VcLkN9Bx7bop8OYU4fnRlpbM",
-                authDomain: "hr-online-training.firebaseapp.com",
-                projectId: "hr-online-training",
-            }, "SecondaryApp");
-        window.secondaryFirebaseApp = secondaryApp;
-
-        const secondaryAuth = (await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js")).getAuth(secondaryApp);
-
-        try {
-            const tempPassword = Math.random().toString(36).slice(-8) + "Aa1!";
-            const userCred = await (await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js")).createUserWithEmailAndPassword(secondaryAuth, email, tempPassword);
-            const uid = userCred.user.uid;
-
-            await (await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js")).sendPasswordResetEmail(secondaryAuth, email);
-
-            await setDoc(doc(db, "users", uid), {
-                email: email,
-                userName: name,
-                createdAt: new Date().toISOString(),
-                status: 'active',
-                role: 'user',
-                employeeId: ''
-            });
-
-            await (await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js")).signOut(secondaryAuth);
-
-            return true;
-        } catch (e) {
-            console.error("[v5 Admin] Invite Error", e);
-            throw e;
-        }
-    },
-
-    // ✨ 強制綁定 Modal (自動大寫)
-    showMandatoryBindingModal: (uid) => {
-        const modal = document.createElement('div');
-        modal.className = 'user-dialog-overlay';
-        modal.style.zIndex = '10000';
-        modal.innerHTML = `
-            <div class="mandatory-modal">
-                <h2 style="color: var(--primary-color); margin-bottom: 1rem;">初次登入設定</h2>
-                <p style="margin-bottom: 2rem; color: #666;">為了確保學習權益，請綁定您的員工資訊。</p>
-                
-                <div class="input-group">
-                    <label class="input-label">真實姓名</label>
-                    <input type="text" id="bind-name" class="input-field" placeholder="請輸入姓名" value="${state.currentUser?.userName || ''}">
-                </div>
-                
-                <div class="input-group">
-                    <label class="input-label">員工編號 (將自動轉為大寫)</label>
-                    <input type="text" id="bind-id" class="input-field" placeholder="例如: A1234">
-                </div>
-
-                <div id="bind-error" style="color: #ef4444; margin-bottom: 1rem; display: none;"></div>
-
-                <button id="btn-bind-submit" class="btn-submit" style="background: var(--primary-color); color: white;">確認綁定</button>
-            </div>
-        `;
-        document.body.appendChild(modal);
-
-        const btn = modal.querySelector('#btn-bind-submit');
-        const idInput = modal.querySelector('#bind-id');
-        const nameInput = modal.querySelector('#bind-name');
-        const err = modal.querySelector('#bind-error');
-
-        btn.onclick = async () => {
-            const rawId = idInput.value.trim().toUpperCase(); // ✨ 自動大寫
-            const name = nameInput.value.trim();
-
-            if (!rawId || !name) {
-                err.textContent = '請填寫所有欄位';
-                err.style.display = 'block';
-                return;
-            }
-
-            try {
-                btn.disabled = true;
-                btn.textContent = '處理中...';
-
-                await updateDoc(doc(db, "users", uid), {
-                    employeeId: rawId,
-                    userName: name,
-                    updatedAt: new Date().toISOString()
-                });
-
-                state.currentUser.employeeId = rawId;
-                state.currentUser.userName = name;
-
-                document.body.removeChild(modal);
-                await fetchCourses();
-                handleRoute();
-
-            } catch (e) {
-                console.error(e);
-                err.textContent = '綁定失敗: ' + e.message;
-                err.style.display = 'block';
-                btn.disabled = false;
-                btn.textContent = '確認綁定';
-            }
-        }
-    }
-};
-
 // ============== 使用者識別模組 ==============
 function initializeUser() {
     // 檢查 sessionStorage (Browser Session) 是否已有使用者資訊
     const stored = sessionStorage.getItem('hr_training_user');
-    const storedAdmin = sessionStorage.getItem('localAdminUser'); // Check for admin session
-
-    if (storedAdmin) {
-        state.adminLoggedIn = true;
-        state.isAdmin = true;
-        return true; // Skip user dialog if admin matches
-    }
-
     if (stored) {
         try {
             state.currentUser = JSON.parse(stored);
@@ -702,23 +470,11 @@ async function getAllProgress() {
 window.addEventListener('load', async () => {
     window.addEventListener('hashchange', handleRoute);
 
-    // v5 開關：設為 true 啟用 Firebase Auth
-    // 設為 false 使用舊的簡易登入系統
-    const enableV5 = false; // ✨ 改為 true 啟用 v5
-    state.useFirebaseAuth = enableV5;
+    // 先識別使用者
+    await initializeUser();
 
-    if (enableV5) {
-        console.log('[App] v5 Firebase Auth 模式啟用');
-        // 初始化 Firebase Auth
-        AuthManager.init();
-        // Auth 狀態變化會自動處理登入和載入課程
-    } else {
-        console.log('[App] 使用傳統登入模式');
-        // 先識別使用者
-        await initializeUser();
-        // 再載入課程
-        await fetchCourses();
-    }
+    // 再載入課程
+    await fetchCourses();
 });
 
 // Render Functions
@@ -741,15 +497,11 @@ async function renderApp(route, id) {
         return;
     }
 
-    if (route === '#home' || route === '') {
+    if (route === '#home') {
         content.appendChild(renderHome());
     } else if (route === '#course') {
-        if (id) {
-            const courseDetail = await renderCourseDetail(id);
-            content.appendChild(courseDetail);
-        } else {
-            content.appendChild(renderHome());
-        }
+        const courseDetail = await renderCourseDetail(id);
+        content.appendChild(courseDetail);
     } else if (route === '#progress') {
         const progressPage = await renderProgress();
         content.appendChild(progressPage);
@@ -766,49 +518,48 @@ function createNavbar(showAdminBtn = false, enableLogoLink = false) {
     const nav = document.createElement('nav');
     nav.className = 'navbar';
 
-    // Logo Logic - FIXED: Use local image and simple link
+    // Logo Logic
     const logoHtml = `
-            <a href="#home" id="logo-link" class="flex items-center gap-2 text-decoration-none" style="margin-right: auto; text-decoration: none; color: inherit; display: flex; align-items: center;">
-                <img src="images/logo.png" alt="MiTAC Logo" style="height: 40px; margin-right: 10px;">
-                MiTAC 線上學習平台
-            </a>
+        <a href="#home" style="display: flex; align-items: center; text-decoration: none; color: inherit;">
+            <img src="images/logo.png" alt="MiTAC Logo" style="height: 40px; width: auto; margin-right: 10px;">
+            MiTAC 線上學習平台
+        </a>
     `;
 
     const userInfo = state.currentUser
-        ? `<span style = "color: #666; margin-right: 1rem;" >👤 ${state.currentUser.userName}</span> `
+        ? `<span style="color: #666; margin-right: 1rem;">👤 ${state.currentUser.userName}</span>`
         : '';
 
     const progressBtnHtml = state.currentUser && !state.adminLoggedIn
         ? '<a href="#progress" class="btn" style="background:transparent; color: var(--primary-color); border: 1px solid var(--primary-color); margin-right: 0.5rem;">我的學習紀錄</a>'
         : '';
 
-    // FIXED: Always show Admin Dashboard button if logged in as admin
     const adminBtnHtml = state.adminLoggedIn
         ? '<a href="#admin" class="btn" style="background:transparent; color: var(--primary-color); border: 1px solid var(--primary-color); margin-right: 0.5rem;">管理員後台</a>'
         : '';
 
     const logoutBtnHtml = (state.currentUser || state.adminLoggedIn)
-        ? `<button id = "btn-logout" class="btn" style = "background:#f44336; color: white; border: none; padding: 0.5rem 1rem;" > 登出</button> `
+        ? `<button id="btn-logout" class="btn" style="background:#f44336; color: white; border: none; padding: 0.5rem 1rem;">登出</button>`
         : '';
 
     // Mobile Hamburger Button
     const mobileMenuBtn = `
-        <button class="mobile-menu-btn" aria - label="Toggle Menu" >
+        <button class="mobile-menu-btn" aria-label="Toggle Menu">
             ☰
         </button>
-        `;
+    `;
 
     nav.innerHTML = `
-        <div class="logo" >
+        <div class="logo">
             ${logoHtml}
         </div>
         ${mobileMenuBtn}
-    <div class="nav-links" id="nav-links">
-        ${userInfo}
-        ${progressBtnHtml}
-        ${adminBtnHtml}
-        ${logoutBtnHtml}
-    </div>
+        <div class="nav-links" id="nav-links">
+            ${userInfo}
+            ${progressBtnHtml}
+            ${adminBtnHtml}
+            ${logoutBtnHtml}
+        </div>
     `;
 
     // Bind Mobile Menu Toggle
@@ -839,33 +590,12 @@ function createNavbar(showAdminBtn = false, enableLogoLink = false) {
                     state.currentUser = null;
                     state.adminLoggedIn = false;
                     sessionStorage.removeItem('hr_training_user');
-                    // FIXED: Clear admin session
-                    sessionStorage.removeItem('localAdminUser');
                     window.location.hash = '#home';
                     window.location.reload();
                 }
             };
         }
     }, 0);
-
-    if (showAdminBtn) {
-        // ...
-    }
-
-    // Logo Click Handler
-    const logoLink = nav.querySelector('#logo-link');
-    if (logoLink) {
-        logoLink.onclick = (e) => {
-            e.preventDefault();
-            // User requested to return to "Course Home"
-            // FIXED: Do NOT turn off admin mode here. Just navigate home.
-            if (state.adminLoggedIn) {
-                state.adminViewMode = 'courses'; // Reset view but keep auth
-            }
-            window.location.hash = '#home';
-            renderAppLegacy('#home'); // Force re-render
-        };
-    }
 
     return nav;
 }
@@ -2041,8 +1771,6 @@ function renderAdmin() {
                 const p = container.querySelector('#admin-pass').value;
                 if (u === 'admin' && p === 'mitachr') {
                     state.adminLoggedIn = true;
-                    state.isAdmin = true;
-                    sessionStorage.setItem('localAdminUser', 'true'); // Persist admin session
                     // Trigger a re-render of the main app container for the admin route
                     renderApp('#admin');
                 } else {
