@@ -2080,6 +2080,7 @@ function renderAdmin() {
                     <button id="tab-courses" class="btn" style="${state.adminViewMode === 'courses' ? 'background:white; color:var(--primary-color);' : 'background:transparent; color:white; border:1px solid white;'}">課程列表</button>
                     <button id="tab-users" class="btn" style="${state.adminViewMode === 'users' ? 'background:white; color:var(--primary-color);' : 'background:transparent; color:white; border:1px solid white;'}">學員管理</button>
                     <button id="tab-behavior" class="btn" style="${state.adminViewMode === 'behavior' ? 'background:white; color:var(--primary-color);' : 'background:transparent; color:white; border:1px solid white;'}">行為分析</button>
+                    <button id="tab-archives" class="btn" style="${state.adminViewMode === 'archives' ? 'background:white; color:var(--primary-color);' : 'background:transparent; color:white; border:1px solid white;'}">歷史封存</button>
                 </div>
             </div>
         </div>
@@ -2089,6 +2090,7 @@ function renderAdmin() {
         container.querySelector('#tab-courses').onclick = () => { state.adminViewMode = 'courses'; renderApp('#admin'); };
         container.querySelector('#tab-users').onclick = () => { state.adminViewMode = 'users'; renderApp('#admin'); };
         container.querySelector('#tab-behavior').onclick = () => { state.adminViewMode = 'behavior'; renderApp('#admin'); };
+        container.querySelector('#tab-archives').onclick = () => { state.adminViewMode = 'archives'; renderApp('#admin'); };
     }
 
     // --- CSS for Tooltips ---
@@ -3555,8 +3557,90 @@ function renderAdmin() {
         setTimeout(renderUserManagement, 0);
     } else if (state.adminViewMode === 'behavior') {
         setTimeout(renderBehavioralDashboard, 0);
+    } else if (state.adminViewMode === 'archives') {
+        setTimeout(renderArchivesView, 0);
     } else {
         setTimeout(renderCourseList, 0);
     }
     return container;
+}
+
+// ============== V5: ARCHIVES VIEW ==============
+async function renderArchivesView() {
+    const workspace = document.querySelector('#admin-workspace');
+    workspace.innerHTML = '<p style="text-align:center;">頛銝?..</p>';
+
+    try {
+        // ?亥岷??歇撠??飛??
+        const q = query(collection(db, "users"), where("status", "==", "archived"));
+        const snapshot = await getDocs(q);
+        const archivedUsers = [];
+        snapshot.forEach(d => archivedUsers.push({ uid: d.id, ...d.data() }));
+
+        workspace.innerHTML = `
+            <div style="background:white; padding:2rem; border-radius:8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
+                <h2 style="margin-bottom: 1.5rem; color: var(--primary-color);">? 甇瑕撠?摨?/h2>
+                <p style="color: #666; margin-bottom: 2rem;">??${archivedUsers.length} 蝑?摮???/p>
+                
+                <table class="full-width" style="border-collapse: collapse;">
+                    <thead>
+                        <tr style="background: #f8f9fa; text-align:left; border-bottom:2px solid #dee2e6;">
+                            <th style="padding:12px;">憪?</th>
+                            <th style="padding:12px;">Email</th>
+                            <th style="padding:12px;">?∪極蝺刻?</th>
+                            <th style="padding:12px;">撠???</th>
+                            <th style="padding:12px;">撠??交?</th>
+                            <th style="padding:12px;">??</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${archivedUsers.length === 0 ?
+                '<tr><td colspan="6" style="text-align:center; padding:3rem; color:#999;">?怎撠?閮?</td></tr>' :
+                archivedUsers.map(u => `
+                                <tr style="border-bottom:1px solid #eee;">
+                                    <td style="padding:12px;">${u.userName || '-'}</td>
+                                    <td style="padding:12px;"><small>${u.email || '-'}</small></td>
+                                    <td style="padding:12px;">${u.employeeId || '?芰?摰?}</td>
+                                    <td style="padding:12px;">
+                                        ${u.archivedReason === 'merged' ?
+                        '<span style="color:#9c27b0;">?? 撌脣?雿?/span>' :
+                        '<span style="color:#f44336;">??儭?撌脣??/span>'}
+                                    </td>
+                                    <td style="padding:12px;"><small>${u.archivedAt ? new Date(u.archivedAt).toLocaleString('zh-TW') : '-'}</small></td>
+                                    <td style="padding:12px;">
+                                        ${u.archivedReason === 'merged' && u.mergedTarget ?
+                        `<small style="color:#666;">??${u.mergedTarget.substring(0, 8)}...</small>` :
+                        '<button class="btn-sm" style="background:#4caf50; color:white;" data-uid="${u.uid}" data-name="${u.userName}" onclick="restoreUser(this)">敺拙?</button>'}
+                                    </td>
+                                </tr>
+                            `).join('')
+            }
+                    </tbody>
+                </table>
+            </div>
+        `;
+
+        // 蝬?敺拙??? (憒??閬?
+        window.restoreUser = async function (btn) {
+            const uid = btn.getAttribute('data-uid');
+            const name = btn.getAttribute('data-name');
+
+            if (confirm(`蝣箏?閬儔?飛?～?{name}??嚗)) {
+                try {
+                    await updateDoc(doc(db, "users", uid), {
+                        status: 'active',
+                        restoredAt: new Date().toISOString()
+                    });
+                    alert('敺拙???嚗?);
+                    renderArchivesView(); // ?頛
+                } catch (e) {
+                    alert('敺拙?憭望?: ' + e.message);
+                }
+            }
+        };
+
+    } catch (e) {
+        console.error('[Archives] Error loading archived users:', e);
+        workspace.innerHTML = `<p style="color:red; text-align:center;">頛憭望?: ${e.message}</p>`;
+    }
 }
