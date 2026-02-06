@@ -197,7 +197,8 @@ const AuthManager = {
                     state.currentUser = null;
                     state.adminLoggedIn = false;
                     state.authInitialized = true;
-                    handleRoute();
+                    state.loading = false; // ✨ 關鍵：設為 false
+                    handleRoute(); // ✨ 呼叫 handleRoute 渲染登入介面
                 }
             }
         });
@@ -737,6 +738,44 @@ async function renderApp(route, id) {
 
     if (state.loading) {
         content.innerHTML = '<h2 style="text-align:center;">載入中...</h2>';
+        app.appendChild(content);
+        return;
+    }
+
+    // ✨ v5: 若未登入且啟用 Firebase Auth，顯示登入介面
+    if (state.useFirebaseAuth && !state.currentUser && route !== '#admin') {
+        content.innerHTML = `
+            <div style="max-width: 400px; margin: 4rem auto; text-align: center; background: white; padding: 3rem; border-radius: 12px; box-shadow: 0 4px 16px rgba(0,0,0,0.1);">
+                <h2 style="color: var(--primary-color); margin-bottom: 1rem;">MiTAC 線上學習平台</h2>
+                <p style="color: #666; margin-bottom: 2rem;">請登入以繼續</p>
+                
+                <button id="btn-google-login" style="
+                    width: 100%;
+                    padding: 12px 24px;
+                    background: #4285f4;
+                    color: white;
+                    border: none;
+                    border-radius: 6px;
+                    font-size: 16px;
+                    cursor: pointer;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    gap: 12px;
+                ">
+                    <svg width="18" height="18" xmlns="http://www.w3.org/2000/svg"><path d="M17.64 9.205c0-.639-.057-1.252-.164-1.841H9v3.481h4.844a4.14 4.14 0 0 1-1.796 2.716v2.259h2.908c1.702-1.567 2.684-3.875 2.684-6.615z" fill="#4285f4"/><path d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z" fill="#34a853"/><path d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z" fill="#fbbc05"/><path d="M9 3.58c1.321 0 2.508.454 3.440 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 7.29C4.672 5.163 6.656 3.58 9 3.58z" fill="#ea4335"/></svg>
+                    使用 Google 帳號登入
+                </button>
+                
+                <div style="margin-top: 2rem; color: #999; font-size: 14px;">
+                    登入後需綁定員工編號
+                </div>
+            </div>
+        `;
+
+        const btnGoogle = content.querySelector('#btn-google-login');
+        btnGoogle.onclick = () => AuthManager.loginWithGoogle();
+
         app.appendChild(content);
         return;
     }
