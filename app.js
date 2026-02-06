@@ -2652,6 +2652,9 @@ function renderAdmin() {
                      <h2 style="margin:0;">學員管理 (${userList.length} 人)</h2>
                      <div class="flex gap-2">
                         <button class="btn" id="btn-batch-delete-users" style="background-color: #dc3545; display: none;">🗑️ 刪除所選學員</button>
+                        ${state.useFirebaseAuth ?
+                    '<button class="btn" id="btn-invite-user" style="background-color: #28a745; color: white;">✉️ 邀請學員</button>' :
+                    ''}
                         <button class="btn" id="btn-add-user">+ 新增學員</button>
                      </div>
                 </div>
@@ -2684,6 +2687,9 @@ function renderAdmin() {
                                     <td style="padding: 1rem; display: flex; gap: 0.5rem;" data-label="功能">
                                         <button class="btn view-user-progress-btn" data-userid="${u.userId}" style="padding: 4px 12px; font-size: 0.85rem; background:#17a2b8; color:white;">學習紀錄</button>
                                         <button class="btn edit-user-btn" data-userid="${u.userId}" style="padding: 4px 12px; font-size: 0.85rem; background:#ffc107; color:black;">編輯</button>
+                                        ${state.useFirebaseAuth ?
+                            `<button class="btn archive-user-btn" data-uid="${u.uid || u.userId}" data-username="${u.userName}" style="padding: 4px 12px; font-size: 0.85rem; background:#ff9800; color:white;">封存</button>` :
+                            ''}
                                     </td>
                                 </tr>
                             `).join('')}
@@ -2723,6 +2729,27 @@ function renderAdmin() {
                             renderUserManagement(); // Reload
                         } catch (e) {
                             alert('刪除失敗: ' + e.message);
+                        }
+                    }
+                };
+            });
+
+            // ✨ v5: Bind Archive Buttons (Soft Delete)
+            card.querySelectorAll('.archive-user-btn').forEach(btn => {
+                btn.onclick = async () => {
+                    const uid = btn.dataset.uid;
+                    const userName = btn.dataset.username;
+                    if (confirm(`確定要封存學員「${userName}」嗎？\n封存後可在「歷史封存」分頁復原。`)) {
+                        try {
+                            await updateDoc(doc(db, "users", uid), {
+                                status: 'archived',
+                                archivedAt: new Date().toISOString(),
+                                archivedReason: 'deleted'
+                            });
+                            alert('已封存學員！');
+                            renderUserManagement(); // Reload
+                        } catch (e) {
+                            alert('封存失敗: ' + e.message);
                         }
                     }
                 };
@@ -2778,9 +2805,38 @@ function renderAdmin() {
             };
 
             // Bind Add User Button
-            card.querySelector('#btn-add-user').onclick = () => {
+            const btnAddUser = card.querySelector('#btn-add-user');
+            btnAddUser.onclick = () => {
                 renderUserEditor(null);
             };
+
+            // ✨ v5: Bind Invite User Button
+            const btnInviteUser = card.querySelector('#btn-invite-user');
+            if (btnInviteUser && state.useFirebaseAuth) {
+                btnInviteUser.onclick = async () => {
+                    const email = prompt('請輸入要邀請的學員 Email：');
+                    if (!email) return;
+
+                    if (!email.includes('@')) {
+                        alert('Email 格式不正確！');
+                        return;
+                    }
+
+                    const btn = btnInviteUser;
+                    btn.disabled = true;
+                    btn.textContent = '邀請中...';
+
+                    try {
+                        await AuthManager.inviteUser(email);
+                        alert(`邀請成功！已發送密碼重設信至 ${email}`);
+                    } catch (e) {
+                        alert('邀請失敗: ' + e.message);
+                    } finally {
+                        btn.disabled = false;
+                        btn.textContent = '✉️ 邀請學員';
+                    }
+                };
+            }
 
             workspace.innerHTML = '';
             workspace.appendChild(card);
