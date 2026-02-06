@@ -704,7 +704,7 @@ window.addEventListener('load', async () => {
 
     // v5 開關：設為 true 啟用 Firebase Auth
     // 設為 false 使用舊的簡易登入系統
-    const enableV5 = false; // ✨ 改為 true 啟用 v5
+    const enableV5 = true; // ✨ v5 已啟用
     state.useFirebaseAuth = enableV5;
 
     if (enableV5) {
@@ -3601,19 +3601,21 @@ async function renderArchivesView() {
                                     <td style="padding:12px;">${u.userName || '-'}</td>
                                     <td style="padding:12px;"><small>${u.email || '-'}</small></td>
                                     <td style="padding:12px;">${u.employeeId || '?芰?摰?}</td>
-                                    <td style="padding:12px;">
-                                        ${u.archivedReason === 'merged' ?
-                        '<span style="color:#9c27b0;">?? 撌脣?雿?/span>' :
-                        '<span style="color:#f44336;">??儭?撌脣??/span>'}
-                                    </td>
+                    < td style = "padding:12px;" >
+                    ${
+                        u.archivedReason === 'merged' ?
+                            '<span style="color:#9c27b0;">?? 撌脣?雿?/span>' :
+                            '<span style="color:#f44336;">??儭?撌脣??/span>'
+                }
+                                    </td >
                                     <td style="padding:12px;"><small>${u.archivedAt ? new Date(u.archivedAt).toLocaleString('zh-TW') : '-'}</small></td>
                                     <td style="padding:12px;">
                                         ${u.archivedReason === 'merged' && u.mergedTarget ?
                         `<small style="color:#666;">??${u.mergedTarget.substring(0, 8)}...</small>` :
                         '<button class="btn-sm" style="background:#4caf50; color:white;" data-uid="${u.uid}" data-name="${u.userName}" onclick="restoreUser(this)">敺拙?</button>'}
                                     </td>
-                                </tr>
-                            `).join('')
+                                </tr >
+                    `).join('')
             }
                     </tbody>
                 </table>
@@ -3641,6 +3643,6 @@ async function renderArchivesView() {
 
     } catch (e) {
         console.error('[Archives] Error loading archived users:', e);
-        workspace.innerHTML = `<p style="color:red; text-align:center;">頛憭望?: ${e.message}</p>`;
+        workspace.innerHTML = `< p style = "color:red; text-align:center;" > 頛憭望 ?: ${ e.message }</p > `;
     }
 }
