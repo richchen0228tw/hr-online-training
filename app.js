@@ -241,8 +241,12 @@ const AuthManager = {
                 await setDoc(userRef, userData);
             }
 
-            // 更新 State
-            state.currentUser = { uid: firebaseUser.uid, ...userData };
+            // 更新 State（✨ 加入 userId 向下相容）
+            state.currentUser = {
+                uid: firebaseUser.uid,
+                userId: userData.employeeId || firebaseUser.uid, // ✨ 向下相容：學習紀錄等功能需要 userId
+                ...userData
+            };
 
             // 檢查管理員權限
             if (userData.role === 'admin') {
@@ -769,6 +773,9 @@ async function renderApp(route, id) {
                 
                 <div style="margin-top: 2rem; color: #999; font-size: 14px;">
                     登入後需綁定員工編號
+                    <div style="margin-top: 1rem;">
+                        <a href="#admin" style="font-size: 0.85rem; color: #999; text-decoration: underline;">管理員後台</a>
+                    </div>
                 </div>
             </div>
         `;
@@ -872,8 +879,17 @@ function createNavbar(showAdminBtn = false, enableLogoLink = false) {
         // Logout Logic
         const logoutBtn = nav.querySelector('#btn-logout');
         if (logoutBtn) {
-            logoutBtn.onclick = () => {
+            logoutBtn.onclick = async () => {
                 if (confirm('確定要登出嗎？')) {
+                    // ✨ v5: 如果啟用 Firebase Auth，調用 signOut
+                    if (state.useFirebaseAuth && auth.currentUser) {
+                        try {
+                            await signOut(auth);
+                        } catch (e) {
+                            console.error('[Logout] Firebase signOut error:', e);
+                        }
+                    }
+
                     state.loading = true;
                     state.currentUser = null;
                     state.adminLoggedIn = false;
