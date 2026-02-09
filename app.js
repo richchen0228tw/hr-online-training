@@ -195,10 +195,14 @@ const AuthManager = {
                 console.log('[v5 Auth] No user.');
                 if (state.useFirebaseAuth) {
                     state.currentUser = null;
-                    state.adminLoggedIn = false;
+                    // ✨ 不清除 adminLoggedIn，因為 admin 不使用 Firebase Auth
+                    // state.adminLoggedIn = false;
                     state.authInitialized = true;
-                    state.loading = false; // ✨ 關鍵：設為 false
-                    handleRoute(); // ✨ 呼叫 handleRoute 渲染登入介面
+                    state.loading = false;
+                    // ✨ 只有在非 admin 狀態下才 handleRoute
+                    if (!state.adminLoggedIn) {
+                        handleRoute();
+                    }
                 }
             }
         });
