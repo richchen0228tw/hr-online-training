@@ -3788,12 +3788,15 @@ function renderAdmin() {
         alert('匯出成功！');
     }
 
+    // ✨ 確保 Header 已被渲染
+    renderAdminHeader();
+
     if (state.adminViewMode === 'users') {
         setTimeout(renderUserManagement, 0);
     } else if (state.adminViewMode === 'behavior') {
         setTimeout(renderBehavioralDashboard, 0);
     } else if (state.adminViewMode === 'archives') {
-        setTimeout(renderArchivesView, 0);
+        setTimeout(() => renderArchivesView(container), 0);
     } else {
         setTimeout(renderCourseList, 0);
     }
@@ -3801,8 +3804,12 @@ function renderAdmin() {
 }
 
 // ============== V5: ARCHIVES VIEW ==============
-async function renderArchivesView() {
-    const workspace = document.querySelector('#admin-workspace');
+async function renderArchivesView(container) {
+    const workspace = container.querySelector('#admin-workspace');
+    if (!workspace) {
+        console.error('[Archives] #admin-workspace not found!');
+        return;
+    }
     workspace.innerHTML = '<p style="text-align:center;">載入中...</p>';
 
     try {
@@ -3866,7 +3873,8 @@ async function renderArchivesView() {
                         restoredAt: new Date().toISOString()
                     });
                     alert('復原成功！');
-                    renderArchivesView();
+                    // ✨ 重新渲染整個後台
+                    renderApp('#admin');
                 } catch (e) {
                     alert('復原失敗: ' + e.message);
                 }
