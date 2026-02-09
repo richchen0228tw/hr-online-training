@@ -257,10 +257,16 @@ const AuthManager = {
             state.loading = false;
 
             // ✨ 檢查是否需要強制綁定編號
-            if (!userData.employeeId) {
-                console.log('[v5 Auth] No Employee ID, triggering binding...');
-                AuthManager.showMandatoryBindingModal(firebaseUser.uid);
+            if (!userData.employeeId || userData.employeeId === '') {
+                console.log('[v5 Auth] No Employee ID detected, showing binding modal...');
+                console.log('[v5 Auth] Current employeeId:', userData.employeeId);
+
+                // 確保 DOM ready 後才渲染 modal
+                setTimeout(() => {
+                    AuthManager.showMandatoryBindingModal(firebaseUser.uid);
+                }, 300);
             } else {
+                console.log('[v5 Auth] Employee ID exists:', userData.employeeId);
                 await fetchCourses();
                 handleRoute();
             }
@@ -335,9 +341,67 @@ const AuthManager = {
             await (await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js")).signOut(secondaryAuth);
 
             return true;
-        } catch (e) {
-            console.error("[v5 Admin] Invite Error", e);
-            throw e;
+        } catch (error) {
+            console.error('[Invite] Error:', error);
+            throw error;
+        }
+    },
+
+    // ✨ 合併帳號功能
+    mergeAccounts: async (sourceUid, targetEmployeeId) => {
+        try {
+            console.log('[Merge] Starting merge:', sourceUid, '→', targetEmployeeId);
+
+            // 1. 查找目標使用者（透過 employeeId）
+            const usersRef = collection(db, 'users');
+            const q = query(usersRef, where('employeeId', '==', targetEmployeeId.toUpperCase()), where('status', '==', 'active'));
+            const querySnap = await getDocs(q);
+
+            if (querySnap.empty) {
+                throw new Error(`找不到員工編號為「${targetEmployeeId}」的目標帳號`);
+            }
+
+            const targetDoc = querySnap.docs[0];
+            const targetUid = targetDoc.id;
+            const targetData = targetDoc.data();
+
+            console.log('[Merge] Target found:', targetUid, targetData.userName);
+
+            // 2. 查找來源帳號的所有學習進度
+            const progressRef = collection(db, 'userProgress');
+            const progressQuery = query(progressRef, where('userId', '==', sourceUid));
+            const progressSnap = await getDocs(progressQuery);
+
+            console.log('[Merge] Found', progressSnap.size, 'progress records to merge');
+
+            // 3. 轉移學習進度至目標帳號
+            const batch = writeBatch(db);
+            progressSnap.forEach(doc => {
+                const newDocRef = doc.ref; // 使用相同的 doc ID
+                batch.update(newDocRef, {
+                    userId: targetEmployeeId.toUpperCase(), // 更新為目標員工編號
+                    mergedFrom: sourceUid,
+                    mergedAt: new Date().toISOString()
+                });
+            });
+
+            // 4. 封存來源帳號並標記為已合併
+            const sourceRef = doc(db, 'users', sourceUid);
+            batch.update(sourceRef, {
+                status: 'archived',
+                archivedAt: new Date().toISOString(),
+                archivedReason: 'merged',
+                mergedTo: targetUid,
+                mergedToEmployeeId: targetEmployeeId.toUpperCase()
+            });
+
+            // 5. 執行批次更新
+            await batch.commit();
+
+            console.log('[Merge] Merge completed successfully');
+        } catch (error) {
+            console.error('[Merge] Error:', error);
+            throw error;
         }
     },
 
@@ -2704,7 +2768,8 @@ function renderAdmin() {
                                         <button class="btn view-user-progress-btn" data-userid="${u.userId}" style="padding: 4px 12px; font-size: 0.85rem; background:#17a2b8; color:white;">學習紀錄</button>
                                         <button class="btn edit-user-btn" data-userid="${u.userId}" style="padding: 4px 12px; font-size: 0.85rem; background:#ffc107; color:black;">編輯</button>
                                         ${state.useFirebaseAuth ?
-                            `<button class="btn archive-user-btn" data-uid="${u.uid || u.userId}" data-username="${u.userName}" style="padding: 4px 12px; font-size: 0.85rem; background:#ff9800; color:white;">封存</button>` :
+                            `<button class="btn archive-user-btn" data-uid="${u.uid || u.userId}" data-username="${u.userName}" style="padding: 4px 12px; font-size: 0.85rem; background:#ff9800; color:white;">封存</button>
+                             <button class="btn merge-user-btn" data-uid="${u.uid || u.userId}" data-username="${u.userName}" data-employeeid="${u.userId}" style="padding: 4px 12px; font-size: 0.85rem; background:#9c27b0; color:white;">🔗 合併</button>` :
                             ''}
                                     </td>
                                 </tr>
@@ -2770,6 +2835,38 @@ function renderAdmin() {
                     }
                 };
             });
+
+            // ✨ v5: 合併帳號按鈕處理
+            card.querySelectorAll('.merge-user-btn').forEach(btn => {
+                btn.onclick = async () => {
+                    const sourceUid = btn.dataset.uid;
+                    const sourceName = btn.dataset.username;
+                    const sourceEmployeeId = btn.dataset.employeeid;
+
+                    const targetEmployeeId = prompt(`請輸入要合併到的目標員工編號：\n\n來源帳號：${sourceName} (${sourceEmployeeId})\n合併後，來源帳號的學習進度將轉移至目標帳號，來源帳號將被封存。`);
+
+                    if (!targetEmployeeId) return;
+
+                    const confirmMerge = window.confirm(`確定要執行帳號合併嗎？\n\n來源：${sourceName} (${sourceEmployeeId})\n目標：${targetEmployeeId}\n\n此操作無法復原！`);
+                    if (!confirmMerge) return;
+
+                    try {
+                        btn.disabled = true;
+                        btn.textContent = '合併中...';
+
+                        // 調用 AuthManager 的合併函數
+                        await AuthManager.mergeAccounts(sourceUid, targetEmployeeId);
+
+                        alert('帳號合併成功！');
+                        renderUserManagement(); // Reload
+                    } catch (e) {
+                        alert('合併失敗: ' + e.message);
+                        btn.disabled = false;
+                        btn.textContent = '🔗 合併';
+                    }
+                };
+            });
+
 
             // Bind Checkbox Logic
             const selectAllCb = card.querySelector('#user-select-all');
