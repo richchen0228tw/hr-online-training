@@ -803,6 +803,8 @@ window.addEventListener('load', async () => {
 
     if (enableV5) {
         console.log('[App] v5 Firebase Auth 模式啟用');
+        // ✨ 先檢查 admin session
+        await initializeUser();
         // 初始化 Firebase Auth
         AuthManager.init();
         // Auth 狀態變化會自動處理登入和載入課程
