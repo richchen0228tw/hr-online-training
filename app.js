@@ -1,5 +1,5 @@
 import { db, auth, googleProvider, signInWithPopup, signOut, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, sendPasswordResetEmail } from './firebase-config.js';
-import { collection, getDocs, addDoc, updateDoc, doc, deleteDoc, query, where, setDoc, getDoc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+import { collection, getDocs, addDoc, updateDoc, doc, deleteDoc, query, where, setDoc, getDoc, writeBatch } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 import { BehavioralTracker } from './behavioral_tracking.js';
 import { MetricsEngine } from './metrics_engine.js';
 
@@ -810,8 +810,8 @@ async function renderApp(route, id) {
         return;
     }
 
-    // ✨ v5: 若未登入且啟用 Firebase Auth，顯示登入介面
-    if (state.useFirebaseAuth && !state.currentUser && route !== '#admin') {
+    // ✨ v5: 若未登入且啟用 Firebase Auth，顯示登入介面（管理員可直接訪問前台）
+    if (state.useFirebaseAuth && !state.currentUser && !state.adminLoggedIn && route !== '#admin') {
         content.innerHTML = `
             <div style="max-width: 400px; margin: 4rem auto; text-align: center; background: white; padding: 3rem; border-radius: 12px; box-shadow: 0 4px 16px rgba(0,0,0,0.1);">
                 <h2 style="color: var(--primary-color); margin-bottom: 1rem;">MiTAC 線上學習平台</h2>
@@ -2155,13 +2155,19 @@ function renderAdmin() {
     `;
 
         setTimeout(() => {
-            const performLogin = () => {
+            const performLogin = async () => {
                 const u = container.querySelector('#admin-user').value;
                 const p = container.querySelector('#admin-pass').value;
                 if (u === 'admin' && p === 'mitachr') {
                     state.adminLoggedIn = true;
                     state.isAdmin = true;
-                    sessionStorage.setItem('localAdminUser', 'true'); // Persist admin session
+                    sessionStorage.setItem('localAdminUser', 'true');
+
+                    // ✨ 管理員登入後載入課程資料
+                    state.loading = true;
+                    await fetchCourses();
+                    state.loading = false;
+
                     // Trigger a re-render of the main app container for the admin route
                     renderApp('#admin');
                 } else {
