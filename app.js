@@ -352,6 +352,14 @@ const AuthManager = {
         try {
             console.log('[Merge] Starting merge:', sourceUid, '→', targetEmployeeId);
 
+            // 0. 查找來源帳號取得 employeeId
+            const sourceDoc = await getDoc(doc(db, 'users', sourceUid));
+            if (!sourceDoc.exists()) {
+                throw new Error('找不到來源帳號');
+            }
+            const sourceEmployeeId = sourceDoc.data().employeeId || sourceDoc.data().userId;
+            console.log('[Merge] Source employeeId:', sourceEmployeeId);
+
             // 1. 查找目標使用者（透過 employeeId）
             const usersRef = collection(db, 'users');
             const q = query(usersRef, where('employeeId', '==', targetEmployeeId.toUpperCase()), where('status', '==', 'active'));
@@ -367,9 +375,9 @@ const AuthManager = {
 
             console.log('[Merge] Target found:', targetUid, targetData.userName);
 
-            // 2. 查找來源帳號的所有學習進度
+            // 2. 查找來源帳號的所有學習進度（使用 employeeId）
             const progressRef = collection(db, 'userProgress');
-            const progressQuery = query(progressRef, where('userId', '==', sourceUid));
+            const progressQuery = query(progressRef, where('userId', '==', sourceEmployeeId));
             const progressSnap = await getDocs(progressQuery);
 
             console.log('[Merge] Found', progressSnap.size, 'progress records to merge');
@@ -476,7 +484,7 @@ const AuthManager = {
 };
 
 // ============== 使用者識別模組 ==============
-function initializeUser() {
+async function initializeUser() {
     // 檢查 sessionStorage (Browser Session) 是否已有使用者資訊
     const stored = sessionStorage.getItem('hr_training_user');
     const storedAdmin = sessionStorage.getItem('localAdminUser'); // Check for admin session
@@ -484,6 +492,13 @@ function initializeUser() {
     if (storedAdmin) {
         state.adminLoggedIn = true;
         state.isAdmin = true;
+
+        // ✨ 管理員重新整理後也要載入課程資料
+        if (state.courses.length === 0) {
+            console.log('[Admin Session] Restoring admin session, loading courses...');
+            await fetchCourses();
+        }
+
         return true; // Skip user dialog if admin matches
     }
 
