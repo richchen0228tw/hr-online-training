@@ -357,8 +357,14 @@ const AuthManager = {
             if (!sourceDoc.exists()) {
                 throw new Error('找不到來源帳號');
             }
-            const sourceEmployeeId = sourceDoc.data().employeeId || sourceDoc.data().userId;
+            const sourceData = sourceDoc.data();
+            const sourceEmployeeId = sourceData.employeeId || sourceData.userId;
             console.log('[Merge] Source employeeId:', sourceEmployeeId);
+
+            // ✨ 防止自我合併
+            if (sourceEmployeeId === targetEmployeeId.toUpperCase()) {
+                throw new Error('不能將帳號合併到自己！');
+            }
 
             // 1. 查找目標使用者（透過 employeeId）
             const usersRef = collection(db, 'users');
@@ -366,7 +372,7 @@ const AuthManager = {
             const querySnap = await getDocs(q);
 
             if (querySnap.empty) {
-                throw new Error(`找不到員工編號為「${targetEmployeeId}」的目標帳號`);
+                throw new Error(`找不到員工編號為「${targetEmployeeId}」的目標帳號，請確認目標帳號存在且狀態為活躍`);
             }
 
             const targetDoc = querySnap.docs[0];
@@ -385,10 +391,10 @@ const AuthManager = {
             // 3. 轉移學習進度至目標帳號
             const batch = writeBatch(db);
             progressSnap.forEach(doc => {
-                const newDocRef = doc.ref; // 使用相同的 doc ID
-                batch.update(newDocRef, {
+                batch.update(doc.ref, {
                     userId: targetEmployeeId.toUpperCase(), // 更新為目標員工編號
-                    mergedFrom: sourceUid,
+                    mergedFrom: sourceEmployeeId, // ✨ 記錄來源 employeeId
+                    mergedFromUid: sourceUid,
                     mergedAt: new Date().toISOString()
                 });
             });
@@ -3800,6 +3806,7 @@ async function renderArchivesView() {
     workspace.innerHTML = '<p style="text-align:center;">載入中...</p>';
 
     try {
+        // ✨ 使用 v10 modular SDK 語法
         const q = query(collection(db, "users"), where("status", "==", "archived"));
         const snapshot = await getDocs(q);
         const archivedUsers = [];
