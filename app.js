@@ -361,8 +361,8 @@ const AuthManager = {
             const sourceEmployeeId = sourceData.employeeId || sourceData.userId;
             console.log('[Merge] Source employeeId:', sourceEmployeeId);
 
-            // ✨ 防止自我合併
-            if (sourceEmployeeId === targetEmployeeId.toUpperCase()) {
+            // ✨ 防止自我合併（使用 Document ID 比較）
+            if (sourceUid === targetEmployeeId || sourceUid.toUpperCase() === targetEmployeeId.toUpperCase()) {
                 throw new Error('不能將帳號合併到自己！');
             }
 
