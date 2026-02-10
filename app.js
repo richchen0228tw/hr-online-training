@@ -1346,12 +1346,8 @@ async function renderApp(route, id) {
                         font-weight: 600;
                     ">MiTAC 線上學習平台</h1>
                 </div>
-                <button id="menu-toggle" style="
-                    background: none;
-                    border: none;
-                    font-size: 1.5rem;
-                    cursor: pointer;
-                    color: #333;
+                <button id="menu-toggle" class="mobile-menu-btn" style="
+                    /* Inherit class styles */
                 ">☰</button>
             </nav>
             
