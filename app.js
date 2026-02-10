@@ -2503,7 +2503,9 @@ async function renderProgress(targetUserId = null) {
         try {
             const userSnap = await getDoc(doc(db, "users", userId));
             if (userSnap.exists()) {
-                userDisplayName = `${userSnap.data().userName} (${userId})`;
+                // ✨ Updated: Prefer Employee ID over UID for display
+                const uData = userSnap.data();
+                userDisplayName = `${uData.userName} (${uData.employeeId || userId})`;
             }
         } catch (e) { console.error(e); }
     } else if (state.currentUser) {
@@ -2812,7 +2814,10 @@ async function renderCourseStats(courseId) {
             // We also need user names map
             const usersSnap = await getDocs(collection(db, "users"));
             const userMap = {};
-            usersSnap.forEach(u => userMap[u.id] = u.data().userName);
+            usersSnap.forEach(u => {
+                const d = u.data();
+                userMap[u.id] = { name: d.userName, empId: d.employeeId };
+            });
 
             if (records.length === 0) {
                 content.innerHTML = '<p class="text-center" style="color:#666; padding:2rem;">目前尚無學員開始此課程</p>';
@@ -2836,7 +2841,10 @@ async function renderCourseStats(courseId) {
                         </thead>
                         <tbody>
                             ${records.map(r => {
-                const Name = userMap[r.userId] || r.userName || r.userId;
+                const uInfo = userMap[r.userId] || {};
+                const Name = uInfo.name || r.userName || r.userId;
+                const DisplayId = uInfo.empId || r.userId;
+
                 const statusColor = r.status === 'completed' ? '#4CAF50' : r.status === 'in-progress' ? '#FF9800' : '#999';
                 const statusText = r.status === 'completed' ? '已完成' : r.status === 'in-progress' ? '進行中 ' : '未開始';
 
@@ -2844,7 +2852,7 @@ async function renderCourseStats(courseId) {
                                 <tr style="border-bottom:1px solid #eee;">
                                     <td style="padding:10px;">
                                         <div style="font-weight:bold;">${Name}</div>
-                                        <div style="font-size:0.8rem; color:#888;">${r.userId}</div>
+                                        <div style="font-size:0.8rem; color:#888;">${DisplayId}</div>
                                     </td>
                                     <td style="padding:10px;">
                                         <span style="color:${statusColor}">${statusText}</span>
