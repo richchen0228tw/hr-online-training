@@ -10,7 +10,9 @@ import {
     createUserWithEmailAndPassword,
     signInWithEmailAndPassword,
     sendPasswordResetEmail,
-    sendEmailVerification
+    sendEmailVerification,
+    confirmPasswordReset,
+    verifyPasswordResetCode
 } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
 
 // Firebase project configuration
@@ -39,5 +41,7 @@ export {
     createUserWithEmailAndPassword,
     signInWithEmailAndPassword,
     sendPasswordResetEmail,
-    sendEmailVerification
+    sendEmailVerification,
+    confirmPasswordReset,
+    verifyPasswordResetCode
 };

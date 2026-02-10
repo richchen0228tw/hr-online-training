@@ -1,4 +1,4 @@
-import { db, auth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, sendPasswordResetEmail } from './firebase-config.js';
+import { db, auth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, sendPasswordResetEmail, confirmPasswordReset, verifyPasswordResetCode } from './firebase-config.js';
 import { collection, getDocs, addDoc, updateDoc, doc, deleteDoc, query, where, setDoc, getDoc, writeBatch } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 import { BehavioralTracker } from './behavioral_tracking.js';
 import { MetricsEngine } from './metrics_engine.js';
@@ -446,12 +446,77 @@ const AuthManager = {
 
     resetPassword: async (email) => {
         try {
+            // ✨ 1. Check if user exists in Firestore first
+            const usersRef = collection(db, 'users');
+            const q = query(usersRef, where('email', '==', email));
+            const querySnapshot = await getDocs(q);
+
+            if (querySnapshot.empty) {
+                alert('找不到此 Email 的帳號，請確認您輸入的 Email 是否正確。');
+                return;
+            }
+
+            // ✨ 2. Send Reset Email
             await sendPasswordResetEmail(auth, email);
             alert(`已發送重設密碼信至 ${email}，請查收信件並設定新密碼。`);
         } catch (e) {
             console.error(e);
-            alert('發送失敗: ' + e.message);
+            alert('發送失敗: ' + getFirebaseErrorMessage(e));
         }
+    },
+
+    // ✨ 處理重設密碼連結點擊後的 UI
+    handlePasswordReset: async (oobCode) => {
+        // Create Modal
+        const modal = document.createElement('div');
+        modal.className = 'user-dialog-overlay';
+        modal.innerHTML = `
+            <div class="user-dialog">
+                <h2 style="color: var(--primary-color); margin-bottom: 1rem;">重設密碼</h2>
+                <p style="margin-bottom: 2rem; color: #666;">請輸入您的新密碼</p>
+                
+                <div class="form-group">
+                    <label>新密碼</label>
+                    <input type="password" id="new-password" placeholder="請輸入新密碼 (至少6碼)">
+                </div>
+                
+                <div id="reset-error" style="color: #ef4444; margin-bottom: 1rem; display: none;"></div>
+
+                <button id="btn-reset-submit" class="btn-submit" style="width: 100%; padding: 10px; background: var(--primary-color); color: white; border: none; border-radius: 4px; cursor: pointer;">確認重設</button>
+            </div>
+        `;
+        document.body.appendChild(modal);
+
+        const btn = modal.querySelector('#btn-reset-submit');
+        const passInput = modal.querySelector('#new-password');
+        const err = modal.querySelector('#reset-error');
+
+        btn.onclick = async () => {
+            const newPass = passInput.value;
+            if (!newPass || newPass.length < 6) {
+                err.textContent = '密碼長度至少需 6 碼';
+                err.style.display = 'block';
+                return;
+            }
+
+            try {
+                btn.disabled = true;
+                btn.textContent = '處理中...';
+                await confirmPasswordReset(auth, oobCode, newPass);
+                alert('密碼重設成功！請使用新密碼登入。');
+                document.body.removeChild(modal);
+                // Clear URL params
+                window.history.replaceState({}, document.title, window.location.pathname);
+                // Reload to show login
+                window.location.reload();
+            } catch (e) {
+                console.error(e);
+                err.textContent = '重設失敗: ' + getFirebaseErrorMessage(e);
+                err.style.display = 'block';
+                btn.disabled = false;
+                btn.textContent = '確認重設';
+            }
+        };
     },
 
     // ✨ 管理員邀請學員 (使用 Secondary App)
@@ -468,27 +533,61 @@ const AuthManager = {
 
         try {
             const tempPassword = Math.random().toString(36).slice(-8) + "Aa1!";
-            const userCred = await (await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js")).createUserWithEmailAndPassword(secondaryAuth, email, tempPassword);
-            const uid = userCred.user.uid;
+            let uid;
+            let isNewUser = true;
+
+            // ✨ Check if Auth User exists
+            try {
+                const userCred = await (await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js")).createUserWithEmailAndPassword(secondaryAuth, email, tempPassword);
+                uid = userCred.user.uid;
+            } catch (createError) {
+                if (createError.code === 'auth/email-already-in-use') {
+                    console.log('[Invite] Auth User already exists.');
+                    isNewUser = false;
+                    // We need the uid to check Firestore. 
+                    // Since we cannot get UID from error, and we are admin, we might assume the previous logic:
+                    // If Auth exists, we send reset email.
+                    // BUT, the user claims "richen@mitac.com.tw" has "NO registration data" (meaning no Firestore doc?).
+
+                    // If we can't get UID easily without Admin SDK, we can't fixing the Firestore doc if it's missing.
+                    // However, we can try to sign in to get the UID? No, we don't know the password.
+
+                    // Best effort: Just send reset email. The user can then login. 
+                    // Upon login, `handleUserLogin` will create the Firestore doc if it's missing.
+                } else {
+                    throw createError;
+                }
+            }
 
             await (await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js")).sendPasswordResetEmail(secondaryAuth, email);
 
-            await setDoc(doc(db, "users", uid), {
-                email: email,
-                userName: name,
-                createdAt: new Date().toISOString(),
-                status: 'active',
-                role: 'user',
-                employeeId: ''
-            });
+            if (isNewUser) {
+                await setDoc(doc(db, "users", uid), {
+                    email: email,
+                    userName: name,
+                    createdAt: new Date().toISOString(),
+                    status: 'active',
+                    role: 'user',
+                    employeeId: ''
+                });
+            }
 
             await (await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js")).signOut(secondaryAuth);
 
-            return true;
+            return {
+                success: true,
+                message: isNewUser ? `邀請成功！已發送密碼重設信至 ${email}` : `此 Email 已註冊過。系統已補發密碼重設信至 ${email}`
+            };
         } catch (error) {
             console.error('[Invite] Error:', error);
             throw error;
         }
+    },
+
+    // ✨ inviteUser: Wrapper for createUserAsAdmin (UI calls this)
+    inviteUser: async (email) => {
+        const name = email.split('@')[0]; // Use email prefix as default name
+        return AuthManager.createUserAsAdmin(email, name);
     },
 
     // ✨ 合併帳號功能
@@ -1175,8 +1274,21 @@ async function getAllProgress() {
 }
 
 // Initialization
+// Initialization
 window.addEventListener('load', async () => {
     window.addEventListener('hashchange', handleRoute);
+
+    // ✨ Check for password reset mode FIRST
+    const urlParams = new URLSearchParams(window.location.search);
+    const mode = urlParams.get('mode');
+    const oobCode = urlParams.get('oobCode');
+
+    if (mode === 'resetPassword' && oobCode) {
+        // Wait for Auth to be ready (optional, but good practice)
+        console.log('[App] Detected password reset mode');
+        AuthManager.handlePasswordReset(oobCode);
+        return; // Stop other initialization to show reset modal
+    }
 
     // v5 開關：設為 true 啟用 Firebase Auth
     // 設為 false 使用舊的簡易登入系統
@@ -1194,6 +1306,7 @@ window.addEventListener('load', async () => {
         console.log('[App] 使用傳統登入模式');
         // 先識別使用者
         await initializeUser();
+
         // 再載入課程
         await fetchCourses();
     }
@@ -1222,7 +1335,7 @@ async function renderApp(route, id) {
                 justify-content: space-between;
             ">
                 <div style="display: flex; align-items: center; gap: 12px;">
-                    <img src="https://www.mitac.com/images/mitac-logo.png" 
+                    <img src="images/logo.png" 
                          alt="MiTAC Logo" 
                          style="height: 40px;"
                          onerror="this.style.display='none'">
@@ -1316,6 +1429,11 @@ async function renderApp(route, id) {
                            onmouseout="this.style.color='#888'">忘記密碼？</a>
                     </div>
                     
+                    <div style="font-size: 0.8rem; color: #666; margin-top: 1rem; text-align: center;">
+                        <p>如果您收到了密碼重設信件，請直接點擊信件中的連結。</p>
+                        <p>連結點擊後應會自動彈出重設密碼視窗。</p>
+                    </div>
+
                     <div style="
                         margin-top: 1.5rem;
                         color: #999;
@@ -3579,8 +3697,8 @@ function renderAdmin() {
                     btn.textContent = '邀請中...';
 
                     try {
-                        await AuthManager.inviteUser(email);
-                        alert(`邀請成功！已發送密碼重設信至 ${email}`);
+                        const result = await AuthManager.inviteUser(email);
+                        alert(result.message || `邀請成功！已發送密碼重設信至 ${email}`);
                     } catch (e) {
                         alert('邀請失敗: ' + e.message);
                     } finally {
