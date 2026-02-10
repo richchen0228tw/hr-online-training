@@ -1404,7 +1404,7 @@ async function renderApp(route, id) {
                             <path d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z" fill="#fbbc05"/>
                             <path d="M9 3.58c1.321 0 2.508.454 3.440 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 7.29C4.672 5.163 6.656 3.58 9 3.58z" fill="#ea4335"/>
                         </svg>
-                        使用 Google 帳號登入
+                        使用公司 Google 帳號登入
                     </button>
 
                     <!-- 分隔線 -->
@@ -1417,7 +1417,10 @@ async function renderApp(route, id) {
                         <input type="email" id="login-email" class="login-input" placeholder="Email 地址" autocomplete="email">
                         <input type="password" id="login-password" class="login-input" placeholder="密碼" autocomplete="current-password">
                         <div id="login-error" style="color: #ef4444; font-size: 0.85rem; margin-bottom: 0.75rem; display: none;"></div>
-                        <button id="btn-email-login" class="btn-email-login">登入</button>
+                        <div style="display: flex; gap: 12px;">
+                            <button id="btn-email-login" class="btn-email-login" style="flex: 1;">登入</button>
+                            <button id="btn-register" class="btn-email-login" style="flex: 1; background-color: #6c757d;">註冊</button>
+                        </div>
                         <a href="#" id="btn-forgot-password" style="
                             display: inline-block;
                             margin-top: 0.75rem;
@@ -1439,7 +1442,16 @@ async function renderApp(route, id) {
                         color: #999;
                         font-size: 13px;
                     ">
-                        登入後需綁定員工編號
+                        首次登入需綁定員工編號
+                    </div>
+
+                    <div style="
+                        margin-top: 0.5rem;
+                        color: #666;
+                        font-size: 14px;
+                        font-weight: 500;
+                    ">
+                        管理員分機：7154、7155
                     </div>
                     
                     <div style="
@@ -1466,7 +1478,15 @@ async function renderApp(route, id) {
         const emailInput = loginPage.querySelector('#login-email');
         const passwordInput = loginPage.querySelector('#login-password');
         const btnEmailLogin = loginPage.querySelector('#btn-email-login');
+        const btnRegister = loginPage.querySelector('#btn-register');
         const loginError = loginPage.querySelector('#login-error');
+
+        // Register Handler
+        if (btnRegister) {
+            btnRegister.onclick = () => {
+                alert('目前僅開放員工內部使用，請聯繫管理員進行註冊與權限開通。');
+            };
+        }
 
         const doEmailLogin = async () => {
             const email = emailInput.value.trim();
