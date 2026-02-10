@@ -32,7 +32,7 @@ const googleProvider = new GoogleAuthProvider();
 export {
     db,
     auth,
-    googleProvider,
+    GoogleAuthProvider,
     signInWithPopup,
     signOut,
     onAuthStateChanged,
