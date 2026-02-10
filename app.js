@@ -3753,7 +3753,7 @@ function renderAdmin() {
 
         const idInputHtml = isNew
             ? `<input type="text" id="edit-user-id" value="" placeholder="請輸入員工編號 (例如: EMP001)" style="width: 100%; padding: 10px; border: 1px solid #ddd;">`
-            : `<input type="text" value="${editingUser.userId}" disabled style="width: 100%; padding: 10px; background: #f5f5f5; border: 1px solid #ddd; cursor: not-allowed;">
+            : `<input type="text" value="${editingUser.employeeId || editingUser.userId}" disabled style="width: 100%; padding: 10px; background: #f5f5f5; border: 1px solid #ddd; cursor: not-allowed;">
                <p style="font-size:0.85rem; color:#999; margin-top:0.25rem;">員工編號無法修改</p>`;
 
         card.innerHTML = `
