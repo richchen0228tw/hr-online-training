@@ -129,6 +129,8 @@ async function fetchCourses() {
         state.courses = courses;
 
         // Auto Migrate if Empty
+        // FIXED: Disable auto-migration to allow deleting all courses
+        /*
         if (courses.length === 0) {
             console.log('Migrating Mock Data...');
             for (const course of MOCK_COURSES) {
@@ -137,6 +139,7 @@ async function fetchCourses() {
             // Fetch again
             return fetchCourses();
         }
+        */
 
     } catch (e) {
         console.error("Error fetching courses: ", e);

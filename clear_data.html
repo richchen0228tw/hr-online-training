@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>清除後台資料</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            background-color: #f0f2f5;
+            margin: 0;
+        }
+
+        .container {
+            background: white;
+            padding: 2rem;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            text-align: center;
+            max-width: 500px;
+            width: 90%;
+        }
+
+        h1 {
+            color: #d93025;
+            font-size: 1.5rem;
+            margin-bottom: 1rem;
+        }
+
+        p {
+            color: #5f6368;
+            line-height: 1.5;
+            margin-bottom: 1rem;
+        }
+
+        button {
+            background-color: #d93025;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            font-size: 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-top: 10px;
+            width: 100%;
+            transition: background 0.3s;
+        }
+
+        button:hover {
+            background-color: #b02018;
+        }
+
+        button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+
+        #log {
+            margin-top: 20px;
+            text-align: left;
+            font-size: 0.9rem;
+            color: #333;
+            white-space: pre-wrap;
+            background: #f1f3f4;
+            padding: 15px;
+            border-radius: 4px;
+            display: none;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h1>⚠️ 危險操作：清除所有資料</h1>
+        <p>此工具將<strong>永久刪除</strong>：<br>1. 所有非管理員的學員帳號 (<code>users</code>)<br>2. 所有學習紀錄 (<code>userProgress</code>)
+        </p>
+        <p style="color: #1a73e8; font-weight: bold;">🛡️ 管理員帳號與課程內容設定將被保留。</p>
+        <button id="btn-clean">⚠️ 確認清除所有資料</button>
+        <div id="log"></div>
+    </div>
+
+    <script type="module">
+        import { db } from './firebase-config.js';
+        import { collection, getDocs, deleteDoc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+
+        const btn = document.getElementById('btn-clean');
+        const logDiv = document.getElementById('log');
+
+        function log(msg) {
+            logDiv.style.display = 'block';
+            logDiv.textContent += msg + '\n';
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+
+        btn.onclick = async () => {
+            if (!confirm('🛑 最後警告！\n\n您即將清除所有學員資料與學習紀錄。\n此操作無法復原。\n\n確定要繼續嗎？')) return;
+
+            btn.disabled = true;
+            btn.textContent = '處理中，請勿關閉視窗...';
+            log('⏳ 開始清除資料...');
+
+            try {
+                // 1. 清除 userProgress
+                log('Step 1/2: 正在清除 userProgress (學習紀錄)...');
+                const progressRef = collection(db, 'userProgress');
+                const progressSnap = await getDocs(progressRef);
+
+                if (progressSnap.empty) {
+                    log('ℹ️ 沒有發現學習紀錄。');
+                } else {
+                    let pCount = 0;
+                    const pPromises = progressSnap.docs.map(async (d) => {
+                        await deleteDoc(d.ref);
+                        pCount++;
+                    });
+                    await Promise.all(pPromises);
+                    log(`✅ 已清除 ${pCount} 筆學習紀錄`);
+                }
+
+                // 2. 清除 users
+                log('Step 2/2: 正在清除 users (學員資料)...');
+                const usersRef = collection(db, 'users');
+                const usersSnap = await getDocs(usersRef);
+
+                let uCount = 0;
+                let adminCount = 0;
+                const uPromises = usersSnap.docs.map(async (d) => {
+                    const data = d.data();
+                    if (data.role !== 'admin') {
+                        await deleteDoc(d.ref);
+                        uCount++;
+                    } else {
+                        adminCount++;
+                        log(`🛡️ 保留管理員帳號: ${data.userName || d.id}`);
+                    }
+                });
+                await Promise.all(uPromises);
+                log(`✅ 已清除 ${uCount} 筆學員資料 (保留 ${adminCount} 位管理員)`);
+
+                log('🎉 清除作業完成！');
+                btn.textContent = '清除完成';
+                btn.style.backgroundColor = '#188038';
+
+                setTimeout(() => {
+                    alert('資料已清除完成！');
+                }, 100);
+
+            } catch (e) {
+                console.error(e);
+                log('❌ 發生錯誤: ' + e.message);
+                btn.textContent = '發生錯誤，請重試';
+                btn.disabled = false;
+            }
+        };
+    </script>
+</body>
+
+</html>
