@@ -184,34 +184,6 @@ function canUserViewCourse(course, userId) {
     return course.allowedUserIds.includes(userId);
 }
 
-// ============== Firebase 錯誤訊息翻譯 ==============
-function getFirebaseErrorMessage(error) {
-    const code = error?.code || '';
-    const map = {
-        'auth/invalid-email': '電子郵件格式不正確',
-        'auth/user-disabled': '此帳號已被停用，請聯絡管理員',
-        'auth/user-not-found': '找不到此帳號，請確認 Email 是否正確',
-        'auth/wrong-password': '密碼錯誤，請重新輸入',
-        'auth/invalid-credential': '帳號或密碼錯誤，請重新輸入',
-        'auth/email-already-in-use': '此 Email 已被註冊',
-        'auth/weak-password': '密碼強度不足，請至少使用 6 個字元',
-        'auth/operation-not-allowed': '此登入方式尚未啟用，請聯絡管理員',
-        'auth/account-exists-with-different-credential': '此 Email 已使用其他方式登入過，請使用該方式登入',
-        'auth/popup-closed-by-user': '登入視窗已關閉，請重試',
-        'auth/cancelled-popup-request': '登入請求已取消',
-        'auth/popup-blocked': '彈出視窗被瀏覽器封鎖，請允許彈出視窗後重試',
-        'auth/network-request-failed': '網路連線失敗，請檢查網路後重試',
-        'auth/too-many-requests': '嘗試次數過多，請稍後再試',
-        'auth/requires-recent-login': '此操作需要重新登入，請先登出再登入',
-        'auth/expired-action-code': '此連結已過期，請重新申請',
-        'auth/invalid-action-code': '此連結無效或已被使用',
-        'auth/missing-password': '請輸入密碼',
-        'auth/admin-restricted-operation': '此操作僅限管理員執行',
-        'auth/internal-error': '系統內部錯誤，請稍後再試'
-    };
-    return map[code] || `發生未預期的錯誤（${code || error.message}）`;
-}
-
 // ============== V5 AUTH MANAGER ==============
 const AuthManager = {
     init: () => {
@@ -413,7 +385,7 @@ const AuthManager = {
         } catch (e) {
             console.error('[v5 Auth] Login handling error:', e);
             state.loading = false;
-            alert('登入處理發生錯誤: ' + getFirebaseErrorMessage(e));
+            alert('登入處理發生錯誤: ' + e.message);
         }
     },
 
@@ -422,7 +394,11 @@ const AuthManager = {
             await signInWithPopup(auth, googleProvider);
         } catch (error) {
             console.error(error);
-            alert('登入失敗：' + getFirebaseErrorMessage(error));
+            if (error.code === 'auth/account-exists-with-different-credential') {
+                alert('此 Email 已使用其他方式（如密碼）登入過，請使用該方式登入。');
+            } else {
+                alert('Google 登入失敗: ' + error.message);
+            }
         }
     },
 
@@ -431,7 +407,7 @@ const AuthManager = {
             await signInWithEmailAndPassword(auth, email, password);
         } catch (error) {
             console.error(error);
-            alert('登入失敗：' + getFirebaseErrorMessage(error));
+            alert('登入失敗: ' + error.message);
         }
     },
 
@@ -1143,7 +1119,7 @@ async function renderApp(route, id) {
             <!-- 中央登入卡片 -->
             <div style="
                 max-width: 500px;
-                margin: 4rem auto;
+                margin: 6rem auto;
                 padding: 0 20px;
             ">
                 <div style="
@@ -1162,7 +1138,7 @@ async function renderApp(route, id) {
                     
                     <p style="
                         color: #666;
-                        margin-bottom: 2rem;
+                        margin-bottom: 2.5rem;
                         font-size: 1rem;
                     ">請登入以繼續</p>
                     
@@ -1191,40 +1167,18 @@ async function renderApp(route, id) {
                         </svg>
                         使用 Google 帳號登入
                     </button>
-
-                    <!-- 分隔線 -->
-                    <div class="login-divider">
-                        <span>或使用 Email 登入</span>
-                    </div>
-
-                    <!-- Email/密碼 登入表單 -->
-                    <div class="login-form">
-                        <input type="email" id="login-email" class="login-input" placeholder="Email 地址" autocomplete="email">
-                        <input type="password" id="login-password" class="login-input" placeholder="密碼" autocomplete="current-password">
-                        <div id="login-error" style="color: #ef4444; font-size: 0.85rem; margin-bottom: 0.75rem; display: none;"></div>
-                        <button id="btn-email-login" class="btn-email-login">登入</button>
-                        <a href="#" id="btn-forgot-password" style="
-                            display: inline-block;
-                            margin-top: 0.75rem;
-                            color: #888;
-                            font-size: 0.85rem;
-                            text-decoration: none;
-                            transition: color 0.2s;
-                        " onmouseover="this.style.color='var(--primary-color)'"
-                           onmouseout="this.style.color='#888'">忘記密碼？</a>
-                    </div>
                     
                     <div style="
-                        margin-top: 1.5rem;
+                        margin-top: 2rem;
                         color: #999;
-                        font-size: 13px;
+                        font-size: 14px;
                     ">
                         登入後需綁定員工編號
                     </div>
                     
                     <div style="
-                        margin-top: 1rem;
-                        padding-top: 1rem;
+                        margin-top: 1.5rem;
+                        padding-top: 1.5rem;
                         border-top: 1px solid #eee;
                     ">
                         <a href="#admin" style="
@@ -1238,64 +1192,8 @@ async function renderApp(route, id) {
             </div>
         `;
 
-        // Google 登入
         const btnGoogle = loginPage.querySelector('#btn-google-login');
         btnGoogle.onclick = () => AuthManager.loginWithGoogle();
-
-        // Email/密碼 登入
-        const emailInput = loginPage.querySelector('#login-email');
-        const passwordInput = loginPage.querySelector('#login-password');
-        const btnEmailLogin = loginPage.querySelector('#btn-email-login');
-        const loginError = loginPage.querySelector('#login-error');
-
-        const doEmailLogin = async () => {
-            const email = emailInput.value.trim();
-            const password = passwordInput.value;
-
-            if (!email || !password) {
-                loginError.textContent = '請輸入 Email 和密碼';
-                loginError.style.display = 'block';
-                return;
-            }
-
-            btnEmailLogin.disabled = true;
-            btnEmailLogin.textContent = '登入中...';
-            loginError.style.display = 'none';
-
-            try {
-                await AuthManager.loginWithEmail(email, password);
-            } catch (e) {
-                // AuthManager.loginWithEmail 內部已有 alert，這裡處理額外 UI
-                loginError.style.display = 'none';
-            } finally {
-                btnEmailLogin.disabled = false;
-                btnEmailLogin.textContent = '登入';
-            }
-        };
-
-        btnEmailLogin.onclick = doEmailLogin;
-        passwordInput.addEventListener('keyup', (e) => { if (e.key === 'Enter') doEmailLogin(); });
-        emailInput.addEventListener('keyup', (e) => { if (e.key === 'Enter') passwordInput.focus(); });
-
-        // 忘記密碼
-        const btnForgot = loginPage.querySelector('#btn-forgot-password');
-        btnForgot.onclick = async (e) => {
-            e.preventDefault();
-            const email = emailInput.value.trim();
-            if (!email) {
-                loginError.textContent = '請先在上方輸入您的 Email 地址';
-                loginError.style.display = 'block';
-                return;
-            }
-            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-            if (!emailRegex.test(email)) {
-                loginError.textContent = '請輸入有效的 Email 格式';
-                loginError.style.display = 'block';
-                return;
-            }
-            loginError.style.display = 'none';
-            await AuthManager.resetPassword(email);
-        };
 
         app.appendChild(loginPage);
         return;
@@ -1693,8 +1591,15 @@ async function renderCourseDetail(id) {
             currentTracker.onEventTracked = (e) => currentEngine.processEvent(e);
         }
 
-        // FIXED: Attach to existing iframe. Video ID and params are in the src attribute.
         currentYouTubePlayer = new YT.Player('youtube-player', {
+            height: '500',
+            width: '100%',
+            videoId: videoId,
+            playerVars: {
+                'start': Math.floor(savedPosition),
+                'autoplay': 1,
+                'rel': 0
+            },
             events: {
                 'onReady': onPlayerReady,
                 'onStateChange': onPlayerStateChange
@@ -2169,23 +2074,9 @@ async function renderCourseDetail(id) {
                         const videoId = extractYouTubeVideoId(part.url);
 
                         if (videoId) {
-                            // FIXED: Use manual iframe with sandbox to prevent "Watch on YouTube" redirection
-                            const savedPosition = unitProgressData[index]?.lastPosition || 0;
-                            const embedUrl = `https://www.youtube.com/embed/${videoId}?enablejsapi=1&autoplay=1&rel=0&modestbranding=1&start=${Math.floor(savedPosition)}`;
-
                             contentDisplay.innerHTML = `
                                 <div style="width: 100%; position: relative;">
-                                    <iframe 
-                                        id="youtube-player" 
-                                        type="text/html" 
-                                        width="100%" 
-                                        height="500" 
-                                        src="${embedUrl}" 
-                                        frameborder="0" 
-                                        sandbox="allow-scripts allow-same-origin allow-presentation" 
-                                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" 
-                                        allowfullscreen
-                                    ></iframe>
+                                    <div id="youtube-player"></div>
                                 </div>
                             `;
 
@@ -2301,53 +2192,7 @@ async function renderProgress(targetUserId = null) {
     const progressContent = div.querySelector('#progress-content');
 
     // 載入進度資料
-    // ✨ 修正：管理員檢視時，同時查詢 Firebase UID 和 employeeId，並合併結果
-    let progressList = [];
-
-    if (isViewAsAdmin) {
-        try {
-            // 1. 查詢 UID 紀錄
-            const listByUid = await getAllUserProgress(userId);
-
-            // 2. 查詢 EmployeeID 紀錄
-            let listByEmpId = [];
-            const userSnap2 = await getDoc(doc(db, "users", userId));
-            if (userSnap2.exists()) {
-                const empId = userSnap2.data().employeeId;
-                if (empId && empId !== userId) {
-                    // console.log(`[renderProgress] 同步查詢 employeeId "${empId}" 的紀錄`);
-                    listByEmpId = await getAllUserProgress(empId);
-                }
-            }
-
-            // 3. 合併邏輯：以 courseId 為 Key，保留 updatedAt 較新者
-            const progressMap = new Map();
-
-            [...listByUid, ...listByEmpId].forEach(p => {
-                const existing = progressMap.get(p.courseId);
-                if (!existing) {
-                    progressMap.set(p.courseId, p);
-                } else {
-                    // 比較更新時間，保留較新的
-                    const timeExisting = existing.updatedAt ? new Date(existing.updatedAt).getTime() : 0;
-                    const timeNew = p.updatedAt ? new Date(p.updatedAt).getTime() : 0;
-                    if (timeNew > timeExisting) {
-                        progressMap.set(p.courseId, p);
-                    }
-                }
-            });
-
-            progressList = Array.from(progressMap.values());
-            console.log(`[renderProgress] 合併後共 ${progressList.length} 筆紀錄`);
-
-        } catch (e) {
-            console.error('[renderProgress] Sync query error:', e);
-            progressList = await getAllUserProgress(userId); // Fallback
-        }
-    } else {
-        // 一般使用者只查自己的 ID (通常 App 盡量保持一致，但 safe practice)
-        progressList = await getAllUserProgress(userId);
-    }
+    const progressList = await getAllUserProgress(userId);
 
     if (progressList.length === 0) {
         progressContent.innerHTML = `

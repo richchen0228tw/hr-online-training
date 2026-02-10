@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>系統自動化測試</title>
+    <style>
+        body {
+            font-family: 'Microsoft JhengHei', Arial, sans-serif;
+            max-width: 1200px;
+            margin: 40px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+
+        h1 {
+            color: #0ABAB5;
+            margin-bottom: 30px;
+        }
+
+        .test-section {
+            background: white;
+            padding: 20px;
+            margin-bottom: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+
+        .test-item {
+            padding: 15px;
+            margin: 10px 0;
+            border-left: 4px solid #ddd;
+            background: #f9f9f9;
+        }
+
+        .test-item.pass {
+            border-left-color: #4caf50;
+            background: #f1f8f4;
+        }
+
+        .test-item.fail {
+            border-left-color: #f44336;
+            background: #fef1f0;
+        }
+
+        .test-item.running {
+            border-left-color: #ff9800;
+            background: #fff8f0;
+        }
+
+        button {
+            background: #0ABAB5;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 10px 5px;
+        }
+
+        button:hover {
+            background: #099a95;
+        }
+
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+
+        .status {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 4px;
+            font-weight: bold;
+            margin-left: 10px;
+        }
+
+        .status.pass {
+            background: #4caf50;
+            color: white;
+        }
+
+        .status.fail {
+            background: #f44336;
+            color: white;
+        }
+
+        .status.running {
+            background: #ff9800;
+            color: white;
+        }
+
+        .status.pending {
+            background: #ddd;
+            color: #666;
+        }
+
+        pre {
+            background: #272822;
+            color: #f8f8f2;
+            padding: 15px;
+            border-radius: 4px;
+            overflow-x: auto;
+            font-size: 13px;
+        }
+
+        .summary {
+            font-size: 18px;
+            font-weight: bold;
+            padding: 20px;
+            text-align: center;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+
+        .summary.success {
+            background: #4caf50;
+            color: white;
+        }
+
+        .summary.failure {
+            background: #f44336;
+            color: white;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>🧪 MiTAC HR 訓練系統 - 自動化測試</h1>
+
+    <div class="test-section">
+        <h2>測試控制</h2>
+        <button id="btnRunTests">執行所有測試</button>
+        <button id="btnClearStorage">清除 Storage</button>
+        <button id="btnViewStorage">查看 Storage</button>
+    </div>
+
+    <div class="test-section">
+        <h2>測試結果</h2>
+        <div id="testResults"></div>
+    </div>
+
+    <div class="test-section" id="storageView" style="display:none;">
+        <h2>Storage 內容</h2>
+        <h3>Session Storage</h3>
+        <pre id="sessionStorageContent"></pre>
+        <h3>Local Storage</h3>
+        <pre id="localStorageContent"></pre>
+    </div>
+
+    <script type="module">
+        const results = [];
+        let testCount = 0;
+        let passCount = 0;
+        let failCount = 0;
+
+        function updateTestUI(name, status, message = '') {
+            const container = document.getElementById('testResults');
+            const testId = `test-${testCount++}`;
+
+            const testDiv = document.createElement('div');
+            testDiv.className = `test-item ${status}`;
+            testDiv.id = testId;
+            testDiv.innerHTML = `
+                <strong>${name}</strong>
+                <span class="status ${status}">${status === 'pass' ? '✅ 通過' : status === 'fail' ? '❌ 失敗' : status === 'running' ? '⏳ 執行中' : '⏸ 待執行'}</span>
+                ${message ? `<div style="margin-top: 10px; color: #666;">${message}</div>` : ''}
+            `;
+            container.appendChild(testDiv);
+
+            if (status === 'pass') passCount++;
+            if (status === 'fail') failCount++;
+
+            return testId;
+        }
+
+        function updateTest(testId, status, message = '') {
+            const testDiv = document.getElementById(testId);
+            if (testDiv) {
+                testDiv.className = `test-item ${status}`;
+                const statusSpan = testDiv.querySelector('.status');
+                statusSpan.className = `status ${status}`;
+                statusSpan.textContent = status === 'pass' ? '✅ 通過' : status === 'fail' ? '❌ 失敗' : '⏳ 執行中';
+
+                if (message) {
+                    let msgDiv = testDiv.querySelector('.test-message');
+                    if (!msgDiv) {
+                        msgDiv = document.createElement('div');
+                        msgDiv.className = 'test-message';
+                        msgDiv.style.marginTop = '10px';
+                        msgDiv.style.color = '#666';
+                        testDiv.appendChild(msgDiv);
+                    }
+                    msgDiv.innerHTML = message;
+                }
+            }
+        }
+
+        async function runTests() {
+            testCount = 0;
+            passCount = 0;
+            failCount = 0;
+            document.getElementById('testResults').innerHTML = '';
+
+            // Test 1: 檢查 Firebase 配置
+            const test1 = updateTestUI('Test 1: Firebase 配置檢查', 'running');
+            try {
+                const response = await fetch('/firebase-config.js');
+                const text = await response.text();
+                if (text.includes('hr-online-training.firebaseapp.com') && text.includes('getAuth')) {
+                    updateTest(test1, 'pass', 'Firebase 配置正確載入');
+                } else {
+                    updateTest(test1, 'fail', 'Firebase 配置異常');
+                }
+            } catch (e) {
+                updateTest(test1, 'fail', `錯誤: ${e.message}`);
+            }
+
+            // Test 2: 檢查 app.js 載入
+            const test2 = updateTestUI('Test 2: app.js 主程式檢查', 'running');
+            try {
+                const response = await fetch('/app.js');
+                const text = await response.text();
+                if (text.includes('enableV5') && text.includes('initializeUser') && text.includes('renderArchivesView')) {
+                    updateTest(test2, 'pass', 'app.js 包含所有必要函數');
+                } else {
+                    updateTest(test2, 'fail', 'app.js 缺少關鍵函數');
+                }
+            } catch (e) {
+                updateTest(test2, 'fail', `錯誤: ${e.message}`);
+            }
+
+            // Test 3: 檢查 enableV5 設定
+            const test3 = updateTestUI('Test 3: v5 模式啟用檢查', 'running');
+            try {
+                const response = await fetch('/app.js');
+                const text = await response.text();
+                const match = text.match(/const\s+enableV5\s*=\s*(true|false)/);
+                if (match && match[1] === 'true') {
+                    updateTest(test3, 'pass', 'v5 模式已啟用 (enableV5 = true)');
+                } else {
+                    updateTest(test3, 'fail', `v5 模式未啟用 (enableV5 = ${match ? match[1] : 'unknown'})`);
+                }
+            } catch (e) {
+                updateTest(test3, 'fail', `錯誤: ${e.message}`);
+            }
+
+            // Test 4: 檢查關鍵修復點
+            const test4 = updateTestUI('Test 4: Admin Session 修復檢查', 'running');
+            try {
+                const response = await fetch('/app.js');
+                const text = await response.text();
+
+                const fixes = {
+                    'L198 註解': text.includes('// state.adminLoggedIn = false;'),
+                    'L203 條件判斷': text.includes('if (!state.adminLoggedIn)'),
+                    'L807 初始化順序': text.includes('await initializeUser();') && text.indexOf('await initializeUser();') < text.indexOf('AuthManager.init();'),
+                    'L841 登入介面條件': text.includes('!state.adminLoggedIn && route !== \'#admin\'')
+                };
+
+                const allFixed = Object.values(fixes).every(v => v);
+                if (allFixed) {
+                    updateTest(test4, 'pass', '所有關鍵修復點都正確實作:<br>' +
+                        Object.entries(fixes).map(([k, v]) => `• ${k}: ${v ? '✅' : '❌'}`).join('<br>'));
+                } else {
+                    updateTest(test4, 'fail', '部分修復點缺失:<br>' +
+                        Object.entries(fixes).map(([k, v]) => `• ${k}: ${v ? '✅' : '❌'}`).join('<br>'));
+                }
+            } catch (e) {
+                updateTest(test4, 'fail', `錯誤: ${e.message}`);
+            }
+
+            // Test 5: 檢查 renderArchivesView
+            const test5 = updateTestUI('Test 5: 歷史封存函數檢查', 'running');
+            try {
+                const response = await fetch('/app.js');
+                const text = await response.text();
+
+                if (text.includes('async function renderArchivesView(container)') &&
+                    text.includes('query(collection(db, "users"), where("status", "==", "archived"))')) {
+                    updateTest(test5, 'pass', 'renderArchivesView 使用 v10 SDK 正確實作');
+                } else {
+                    updateTest(test5, 'fail', 'renderArchivesView 函數異常');
+                }
+            } catch (e) {
+                updateTest(test5, 'fail', `錯誤: ${e.message}`);
+            }
+
+            // Test 6: Index.html 檢查
+            const test6 = updateTestUI('Test 6: index.html 檢查', 'running');
+            try {
+                const response = await fetch('/index.html');
+                const text = await response.text();
+                if (text.includes('type="module"') && text.includes('app.js')) {
+                    updateTest(test6, 'pass', 'index.html 正確引入 ES6 模組');
+                } else {
+                    updateTest(test6, 'fail', 'index.html 配置異常');
+                }
+            } catch (e) {
+                updateTest(test6, 'fail', `錯誤: ${e.message}`);
+            }
+
+            // 顯示總結
+            showSummary();
+        }
+
+        function showSummary() {
+            const container = document.getElementById('testResults');
+            const summaryDiv = document.createElement('div');
+            const total = passCount + failCount;
+            const success = failCount === 0;
+
+            summaryDiv.className = `summary ${success ? 'success' : 'failure'}`;
+            summaryDiv.innerHTML = `
+                <div>測試完成！</div>
+                <div style="margin-top: 10px;">
+                    通過: ${passCount}/${total} | 失敗: ${failCount}/${total}
+                </div>
+                ${success ? '<div style="margin-top: 10px;">🎉 所有程式碼檢查通過！</div>' : '<div style="margin-top: 10px;">⚠️ 部分檢查失敗，請查看詳細資訊</div>'}
+            `;
+            container.insertBefore(summaryDiv, container.firstChild);
+        }
+
+        function clearStorage() {
+            sessionStorage.clear();
+            localStorage.clear();
+            alert('Storage 已清除！');
+        }
+
+        function viewStorage() {
+            const storageView = document.getElementById('storageView');
+            const sessionContent = document.getElementById('sessionStorageContent');
+            const localContent = document.getElementById('localStorageContent');
+
+            const session = {};
+            for (let i = 0; i < sessionStorage.length; i++) {
+                const key = sessionStorage.key(i);
+                session[key] = sessionStorage.getItem(key);
+            }
+
+            const local = {};
+            for (let i = 0; i < localStorage.length; i++) {
+                const key = localStorage.key(i);
+                local[key] = localStorage.getItem(key);
+            }
+
+            sessionContent.textContent = JSON.stringify(session, null, 2);
+            localContent.textContent = JSON.stringify(local, null, 2);
+            storageView.style.display = 'block';
+        }
+
+        document.getElementById('btnRunTests').addEventListener('click', runTests);
+        document.getElementById('btnClearStorage').addEventListener('click', clearStorage);
+        document.getElementById('btnViewStorage').addEventListener('click', viewStorage);
+
+        // 自動執行測試
+        window.addEventListener('load', () => {
+            setTimeout(runTests, 500);
+        });
+    </script>
+</body>
+
+</html>
