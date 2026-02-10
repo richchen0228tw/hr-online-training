@@ -644,32 +644,59 @@ const AuthManager = {
         const modal = document.createElement('div');
         modal.className = 'user-dialog-overlay';
         modal.style.zIndex = '10000';
+
+        // Add a close handler
+        const handleClose = async () => {
+            try {
+                // If user cancels binding, sign them out to prevent invalid state
+                await signOut(auth);
+                document.body.removeChild(modal);
+                // Reload to reset state and show login button again
+                window.location.reload();
+            } catch (e) {
+                console.error('Sign out failed:', e);
+                // Force remove anyway
+                if (document.body.contains(modal)) {
+                    document.body.removeChild(modal);
+                }
+            }
+        };
+
         modal.innerHTML = `
-            <div class="mandatory-modal">
+            <div class="user-dialog" style="position: relative;">
+                <button id="btn-bind-close" class="modal-close-btn" style="position: absolute; top: 15px; right: 15px; background: none; border: none; font-size: 1.5rem; cursor: pointer; color: #999;">&times;</button>
                 <h2 style="color: var(--primary-color); margin-bottom: 1rem;">初次登入設定</h2>
                 <p style="margin-bottom: 2rem; color: #666;">為了確保學習權益，請綁定您的員工資訊。</p>
                 
-                <div class="input-group">
-                    <label class="input-label">真實姓名</label>
-                    <input type="text" id="bind-name" class="input-field" placeholder="請輸入姓名" value="${state.currentUser?.userName || ''}">
+                <div class="form-group">
+                    <label>中文全名</label>
+                    <input type="text" id="bind-name" placeholder="請輸入中文全名" value="${state.currentUser?.userName || ''}">
                 </div>
                 
-                <div class="input-group">
-                    <label class="input-label">員工編號 (將自動轉為大寫)</label>
-                    <input type="text" id="bind-id" class="input-field" placeholder="例如: A1234">
+                <div class="form-group">
+                    <label>員工編號 (4碼，大小寫不拘)</label>
+                    <input type="text" id="bind-id" placeholder="請輸入4碼員工編號">
                 </div>
 
                 <div id="bind-error" style="color: #ef4444; margin-bottom: 1rem; display: none;"></div>
 
-                <button id="btn-bind-submit" class="btn-submit" style="background: var(--primary-color); color: white;">確認綁定</button>
+                <button id="btn-bind-submit" class="btn-submit" style="width: 100%; padding: 10px; background: var(--primary-color); color: white; border: none; border-radius: 4px; cursor: pointer;">確認綁定</button>
             </div>
         `;
+
         document.body.appendChild(modal);
 
         const btn = modal.querySelector('#btn-bind-submit');
+        const closeBtn = modal.querySelector('#btn-bind-close');
         const idInput = modal.querySelector('#bind-id');
         const nameInput = modal.querySelector('#bind-name');
         const err = modal.querySelector('#bind-error');
+
+        // Close button event
+        closeBtn.onclick = handleClose;
+
+        // Also close on background click? Optional, but safer to force explicit close or submit.
+        // modal.onclick = (e) => { if(e.target === modal) handleClose(); };
 
         btn.onclick = async () => {
             const rawId = idInput.value.trim().toUpperCase(); // ✨ 自動大寫
@@ -677,6 +704,13 @@ const AuthManager = {
 
             if (!rawId || !name) {
                 err.textContent = '請填寫所有欄位';
+                err.style.display = 'block';
+                return;
+            }
+
+            // Simple length check for "4碼" prompt
+            if (rawId.length !== 4) {
+                err.textContent = '員工編號格式錯誤，請輸入4碼編號';
                 err.style.display = 'block';
                 return;
             }
