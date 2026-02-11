@@ -64,8 +64,13 @@ service cloud.firestore {
     // 課程資料
     // ========================================
     match /courses/{courseId} {
-      // 讀取：所有已登入使用者
-      allow read: if isAuthenticated();
+      // 讀取：所有已登入使用者，但新人專區課程需有權限
+      allow read: if isAuthenticated() && (
+        !('category' in resource.data) || 
+        resource.data.category != 'newcomer' || 
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.newcomerAccess == true ||
+        isAdmin()
+      );
 
       // 寫入：僅管理員
       allow write: if isAdmin();

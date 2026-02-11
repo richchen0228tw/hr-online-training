@@ -1585,6 +1585,9 @@ async function renderApp(route, id) {
     } else if (route === '#progress') {
         const progressPage = await renderProgress();
         content.appendChild(progressPage);
+    } else if (route === '#newcomer') {
+        const newcomerPage = await renderNewcomerZone();
+        content.appendChild(newcomerPage);
     } else if (route === '#admin') {
         content.appendChild(renderAdmin());
     } else {
@@ -1619,6 +1622,11 @@ function createNavbar(showAdminBtn = false, enableLogoLink = false) {
         ? '<a href="#admin" class="btn" style="background:transparent; color: var(--primary-color); border: 1px solid var(--primary-color); margin-right: 0.5rem;">管理員後台</a>'
         : '';
 
+    // ✨ 新人專區連結
+    const newcomerBtnHtml = (state.adminLoggedIn || (state.currentUser && state.currentUser.newcomerAccess))
+        ? '<a href="#newcomer" class="btn" style="background:transparent; color: #E91E63; border: 1px solid #E91E63; margin-right: 0.5rem;">新人專區</a>'
+        : '';
+
     const logoutBtnHtml = (state.currentUser || state.adminLoggedIn)
         ? `<button id = "btn-logout" class="btn" style = "background:#f44336; color: white; border: none; padding: 0.5rem 1rem;" > 登出</button> `
         : '';
@@ -1637,6 +1645,7 @@ function createNavbar(showAdminBtn = false, enableLogoLink = false) {
         ${mobileMenuBtn}
     <div class="nav-links" id="nav-links">
         ${userInfo}
+        ${newcomerBtnHtml}
         ${progressBtnHtml}
         ${adminBtnHtml}
         ${logoutBtnHtml}
@@ -1720,8 +1729,10 @@ function renderHome() {
     grid.style.gridTemplateColumns = 'repeat(auto-fit, minmax(300px, 1fr))';
     grid.style.gap = '2rem';
 
-    // Availability Filter
-    const coursesToRender = state.courses.filter(c => canUserViewCourse(c, state.currentUser?.userId));
+    // Availability Filter & Exclude Newcomer Courses
+    const coursesToRender = state.courses.filter(c =>
+        canUserViewCourse(c, state.currentUser?.userId) && c.category !== 'newcomer'
+    );
 
     coursesToRender.forEach(async (course) => {
         const card = document.createElement('div');
@@ -1761,6 +1772,71 @@ function renderHome() {
 
     if (coursesToRender.length === 0) {
         grid.innerHTML = `<div style="grid-column: 1/-1; text-align:center; color:#666;">目前沒有開放的課程</div>`;
+    }
+
+    section.appendChild(grid);
+    return section;
+}
+
+function renderNewcomerZone() {
+    // Check permission again (Client-side protection)
+    if (!state.adminLoggedIn && (!state.currentUser || !state.currentUser.newcomerAccess)) {
+        return createErrorView('您沒有權限進入新人專區', false);
+    }
+
+    const section = document.createElement('div');
+    section.innerHTML = `<h1 style="text-align:center; margin-bottom: 1rem; margin-top: 2rem; color: #E91E63;">新人訓練專區</h1><p style="text-align:center; color:#666; margin-bottom:4rem;">歡迎加入！以下是為您準備的必修課程</p>`;
+
+    const grid = document.createElement('div');
+    grid.className = 'grid full-width';
+    grid.style.gridTemplateColumns = 'repeat(auto-fit, minmax(300px, 1fr))';
+    grid.style.gap = '2rem';
+
+    // Filter Newcomer Courses
+    const coursesToRender = state.courses.filter(c =>
+        canUserViewCourse(c, state.currentUser?.userId) && c.category === 'newcomer'
+    );
+
+    coursesToRender.forEach(async (course) => {
+        const card = document.createElement('div');
+        card.className = 'course-card';
+        card.style.borderTop = `5px solid ${course.color || '#E91E63'}`;
+
+        // 載入進度資料
+        let progressHtml = '';
+        if (state.currentUser) {
+            const progress = await loadProgress(state.currentUser.userId, course.id);
+            if (progress && progress.completionRate > 0) {
+                const statusText = progress.status === 'completed' ? '已完成' : '學習中';
+                const statusColor = progress.status === 'completed' ? '#4CAF50' : '#FF9800';
+                progressHtml = `
+                    <div class="progress-container" style="margin: 1rem 0;">
+                        <div class="progress-info" style="display: flex; justify-content: space-between; margin-bottom: 0.5rem; font-size: 0.85rem;">
+                            <span style="color: ${statusColor};">⬤ ${statusText}</span>
+                            <span style="color: #666;">${progress.completionRate}%</span>
+                        </div>
+                        <div class="progress-bar">
+                            <div class="progress-fill" style="width: ${progress.completionRate}%; background-color: ${course.color || '#E91E63'};"></div>
+                        </div>
+                    </div>
+                `;
+            }
+        }
+
+        card.innerHTML = `
+            <div class="course-title">${escapeHtml(course.title)}</div>
+            <div class="course-meta">${course.parts ? course.parts.length : 0} 個單元</div>
+            ${progressHtml}
+            <div class="course-meta" style="font-size:0.8rem; margin-top:0.5rem; color:#888;">
+                ${course.courseHours ? `時數: ${escapeHtml(String(course.courseHours))} 小時` : ''}
+            </div>
+            <a href="#course/${course.id}" class="btn" style="background-color: ${course.color || '#E91E63'}">進入課程</a>
+        `;
+        grid.appendChild(card);
+    });
+
+    if (coursesToRender.length === 0) {
+        grid.innerHTML = `<div style="grid-column: 1/-1; text-align:center; color:#666;">目前沒有新人專區課程</div>`;
     }
 
     section.appendChild(grid);
@@ -3526,7 +3602,9 @@ function renderAdmin() {
                     userName: data.userName || '',
                     email: data.email || '',
                     courses: [],
-                    lastActive: data.lastActive || data.createdAt || null // ✨ 優先用 lastActive
+                    courses: [],
+                    lastActive: data.lastActive || data.createdAt || null, // ✨ 優先用 lastActive
+                    newcomerAccess: data.newcomerAccess || false // ✨ 新人專區權限
                 };
                 // ✨ 建立 employeeId → docId 映射（用於匹配 progress）
                 if (data.employeeId) {
@@ -3876,6 +3954,15 @@ function renderAdmin() {
                     <input type="email" id="edit-user-email" value="${editingUser.email || ''}" style="width: 100%; padding: 10px; border: 1px solid #ddd;">
                 </div>
                 
+                
+                <div class="form-group margin-bottom: 1.5rem;">
+                    <label style="display:block; margin-bottom:0.5rem; font-weight:bold;">權限設定</label>
+                    <label style="cursor: pointer; display: flex; align-items: center; gap: 8px;">
+                        <input type="checkbox" id="edit-newcomer-access" ${editingUser.newcomerAccess ? 'checked' : ''} style="transform: scale(1.2);">
+                        開放新人專區 (Newcomer Zone)
+                    </label>
+                </div>
+
                 <div class="flex justify-end gap-2">
                     <button class="btn" id="btn-cancel-user" style="background: #ccc; color: #333;">取消</button>
                     <button class="btn" id="btn-save-user">${isNew ? '新增學員' : '儲存變更'}</button>
@@ -3936,6 +4023,7 @@ function renderAdmin() {
                         userId,
                         userName: newName,
                         email: newEmail,
+                        newcomerAccess: card.querySelector('#edit-newcomer-access').checked, // ✨ Save permission
                         createdAt: new Date().toISOString()
                     });
                     alert('新增成功');
@@ -3944,6 +4032,7 @@ function renderAdmin() {
                     await setDoc(doc(db, "users", userId), {
                         userName: newName,
                         email: newEmail,
+                        newcomerAccess: card.querySelector('#edit-newcomer-access').checked, // ✨ Save permission
                         // Preserve createdAt? setDoc(..., {merge: true}) will preserve it.
                     }, { merge: true });
                     alert('儲存成功');
@@ -3983,6 +4072,13 @@ function renderAdmin() {
                 <button class="btn" id="btn-back-list" style="background-color: #6c757d;">&larr; 返回列表</button>
             </div>
         <div class="course-editor" style="border: 1px solid var(--border-color); padding: 2rem; margin-top: 2rem;">
+            <div class="form-group mb-4">
+                <label><strong>課程類別</strong></label>
+                <select id="edit-category" style="width:100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                    <option value="general" ${editingCourse.category !== 'newcomer' ? 'selected' : ''}>一般課程 (General)</option>
+                    <option value="newcomer" ${editingCourse.category === 'newcomer' ? 'selected' : ''}>新人專區 (Newcomer)</option>
+                </select>
+            </div>
             <div class="form-group mb-4"><label><strong>課程標題</strong></label><input type="text" id="edit-title" value="${editingCourse.title}" /></div>
             <div class="grid gap-4 mb-4" style="grid-template-columns: 1fr 1fr;">
                 <div><label><strong>線上開放日期</strong></label><input type="date" id="edit-start" value="${editingCourse.startDate || ''}" style="width:100%; padding: 8px; border: 1px solid #ddd;" /></div>
@@ -4112,6 +4208,8 @@ function renderAdmin() {
         renderUnits();
 
         // Editor Bindings
+        // Editor Bindings
+        editorCard.querySelector('#edit-category').onchange = (e) => editingCourse.category = e.target.value;
         editorCard.querySelector('#edit-title').oninput = (e) => editingCourse.title = e.target.value;
         editorCard.querySelector('#edit-start').oninput = (e) => editingCourse.startDate = e.target.value;
         editorCard.querySelector('#edit-end').oninput = (e) => editingCourse.endDate = e.target.value;
@@ -4230,7 +4328,11 @@ function renderAdmin() {
                     } else {
                         // UPDATE
                         // Remove ID from object before saving (updateDoc takes ID separately)
+                        // Remove ID from object before saving (updateDoc takes ID separately)
                         const { id, ...dataToSave } = editingCourse;
+                        // Ensure category is set
+                        if (!dataToSave.category) dataToSave.category = 'general';
+
                         await updateDoc(doc(db, "courses", course.id), dataToSave);
                     }
 
