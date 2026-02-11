@@ -3,21 +3,6 @@ import { collection, getDocs, addDoc, updateDoc, doc, deleteDoc, query, where, s
 import { BehavioralTracker } from './behavioral_tracking.js';
 import { MetricsEngine } from './metrics_engine.js';
 
-// 🔒 XSS 防護：HTML 実體編碼
-function escapeHtml(str) {
-    if (str === null || str === undefined) return '';
-    const div = document.createElement('div');
-    div.appendChild(document.createTextNode(String(str)));
-    return div.innerHTML;
-}
-
-// 🔒 生產環境關閉 console.log/debug 輸出，避免洩露內部資訊
-if (location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
-    console.log = () => { };
-    console.debug = () => { };
-    // 保留 console.error 和 console.warn 供維運除錯
-}
-
 // State
 const state = {
     currentRoute: '',
@@ -28,8 +13,7 @@ const state = {
     adminViewMode: 'courses', // 'courses', 'users', 'archives'
     adminSortBy: 'openDate',   // 'openDate' or 'actualDate'
     authInitialized: false,    // v5: Firebase Auth 初始化完成
-    useFirebaseAuth: false,    // v5: 啟用 Firebase Auth (漸進式切換開關)
-    adminLoginInProgress: false // 🔒 防止管理員登入時 handleUserLogin 重複處理
+    useFirebaseAuth: false     // v5: 啟用 Firebase Auth (漸進式切換開關)
 };
 
 // YouTube Player Management
@@ -236,24 +220,20 @@ const AuthManager = {
     init: () => {
         onAuthStateChanged(auth, async (user) => {
             if (user) {
-                // 🔒 管理員登入流程中，由 performLogin 自行處理，跳過 handleUserLogin
-                if (state.adminLoginInProgress) {
-                    console.log('[v5 Auth] Admin login in progress, skipping handleUserLogin');
-                    return;
-                }
                 console.log('[v5 Auth] User detected:', user.uid);
                 await AuthManager.handleUserLogin(user);
             } else {
                 console.log('[v5 Auth] No user.');
                 if (state.useFirebaseAuth) {
                     state.currentUser = null;
-                    // 🔒 管理員現在使用 Firebase Auth，登出時清除 admin 狀態
-                    state.adminLoggedIn = false;
-                    state.isAdmin = false;
-                    sessionStorage.removeItem('localAdminUser');
+                    // ✨ 不清除 adminLoggedIn，因為 admin 不使用 Firebase Auth
+                    // state.adminLoggedIn = false;
                     state.authInitialized = true;
                     state.loading = false;
-                    handleRoute();
+                    // ✨ 只有在非 admin 狀態下才 handleRoute
+                    if (!state.adminLoggedIn) {
+                        handleRoute();
+                    }
                 }
             }
         });
@@ -412,20 +392,18 @@ const AuthManager = {
                 ...userData
             };
 
-            // 🔒 檢查管理員權限
+            // 檢查管理員權限
             if (userData.role === 'admin') {
                 state.adminLoggedIn = true;
-                state.isAdmin = true;
-                sessionStorage.setItem('localAdminUser', 'true');
             }
 
             state.authInitialized = true;
             state.loading = false;
 
             // ✨ 檢查是否需要強制綁定編號 (包含未存檔的遷移用戶)
-            // 🔒 管理員不需要綁定員工編號
-            if ((isNewUnsaved || !userData.employeeId || userData.employeeId === '') && userData.role !== 'admin') {
+            if (isNewUnsaved || !userData.employeeId || userData.employeeId === '') {
                 console.log('[v5 Auth] No Employee ID detected, showing binding modal...');
+                // console.log('[v5 Auth] Current employeeId:', userData.employeeId);
 
                 // 確保 DOM ready 後才渲染 modal
                 setTimeout(() => {
@@ -441,7 +419,7 @@ const AuthManager = {
         } catch (e) {
             console.error('[v5 Auth] Login handling error:', e);
             state.loading = false;
-            alert('登入處理發生錯誤，請稍後再試或聯繫管理員。');
+            alert('登入處理發生錯誤: ' + getFirebaseErrorMessage(e));
         }
     },
 
@@ -980,8 +958,8 @@ const AuthManager = {
                 handleRoute();
 
             } catch (e) {
-                console.error('[Binding Error]', e);
-                err.textContent = '綁定失敗，請稍後再試或聯繫管理員。';
+                console.error(e);
+                err.textContent = '綁定失敗: ' + e.message;
                 err.style.display = 'block';
                 btn.disabled = false;
                 btn.textContent = '確認綁定';
@@ -1122,8 +1100,8 @@ function showUserDialog() {
                     finishLogin(newUser);
                 }
             } catch (e) {
-                console.error('[Login Error]', e);
-                errorMsg.textContent = '系統發生錯誤，請稍後再試或聯繫管理員。';
+                console.error("Login Error", e);
+                errorMsg.textContent = '系統錯誤，請與管理員聯繫: ' + e.message;
                 errorMsg.style.display = 'block';
                 submitBtn.disabled = false;
                 submitBtn.textContent = '開始學習 / 註冊';
@@ -1601,7 +1579,7 @@ function createNavbar(showAdminBtn = false, enableLogoLink = false) {
     `;
 
     const userInfo = state.currentUser
-        ? `<span style = "color: #666; margin-right: 1rem;" >👤 ${escapeHtml(state.currentUser.userName)}</span> `
+        ? `<span style = "color: #666; margin-right: 1rem;" >👤 ${state.currentUser.userName}</span> `
         : '';
 
     const progressBtnHtml = state.currentUser && !state.adminLoggedIn
@@ -1744,10 +1722,10 @@ function renderHome() {
         }
 
         card.innerHTML = `
-            <div class="course-title">${escapeHtml(course.title)}</div>
+            <div class="course-title">${course.title}</div>
             <div class="course-meta">${course.parts ? course.parts.length : 0} 個單元</div>
             ${progressHtml}
-            <div class="course-meta" style="font-size:0.8rem; margin-top:0.5rem; color:#888;">\r\n                線上開放: ${escapeHtml(course.startDate || '未設定')} ~ ${escapeHtml(course.endDate || '未設定')}\r\n                ${course.actualStartDate ? `<br>實際課程: ${escapeHtml(course.actualStartDate)} ~ ${escapeHtml(course.actualEndDate || '')}` : ''}\r\n                ${course.courseHours ? `<br>時數: ${escapeHtml(String(course.courseHours))} 小時` : ''}\r\n            </div>
+            <div class="course-meta" style="font-size:0.8rem; margin-top:0.5rem; color:#888;">\r\n                線上開放: ${course.startDate || '未設定'} ~ ${course.endDate || '未設定'}\r\n                ${course.actualStartDate ? `<br>實際課程: ${course.actualStartDate} ~ ${course.actualEndDate || ''}` : ''}\r\n                ${course.courseHours ? `<br>時數: ${course.courseHours} 小時` : ''}\r\n            </div>
             <a href="#course/${course.id}" class="btn" style="background-color: ${course.color || '#0ABAB5'}">進入課程</a>
         `;
         grid.appendChild(card);
@@ -1836,7 +1814,7 @@ async function renderCourseDetail(id) {
 
             <!-- Course Title & Nav & Progress -->
             <div style="text-align:center; margin-bottom: 2rem;">
-                <h2 style="margin-bottom: 1rem;">${escapeHtml(course.title)}</h2>
+                <h2 style="margin-bottom: 1rem;">${course.title}</h2>
                 <div id="course-progress-bar" style="max-width: 500px; margin: 0 auto 1.5rem auto;"></div>
                 <div id="unit-buttons-container" class="flex" style="justify-content: center; gap: 1rem; flex-wrap: wrap;"></div>
             </div>
@@ -2543,7 +2521,7 @@ async function renderProgress(targetUserId = null) {
             : '<a href="#home" class="btn" style="background-color: #6c757d;">&larr; 回首頁</a>'
         }
         </div>
-        <p style="color: #666; margin-bottom: 3rem;">使用者：${escapeHtml(userDisplayName)}</p>
+        <p style="color: #666; margin-bottom: 3rem;">使用者：${userDisplayName}</p>
         <div id="progress-content" style="min-height: 300px;">
             <p style="text-align: center; color: #888;">載入中...</p>
         </div>
@@ -2907,7 +2885,7 @@ async function renderCourseStats(courseId) {
 
         } catch (e) {
             console.error(e);
-            content.innerHTML = `<p style="color:red;">載入失敗，請稍後再試。</p>`;
+            content.innerHTML = `<p style="color:red;">載入失敗: ${e.message}</p>`;
         }
     }, 0);
 
@@ -2923,78 +2901,32 @@ function renderAdmin() {
         <div class="container" style="max-width: 400px; margin-top: 5rem; text-align: center;">
                  <h2 class="mb-4">管理員登入</h2>
                  <div style="background: white; padding: 2rem; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
-                    <input type="email" id="admin-user" placeholder="管理員 Email" style="width: 100%; padding: 10px; margin-bottom: 1rem; border: 1px solid #ddd; border-radius: 4px;" autocomplete="email">
-                    <input type="password" id="admin-pass" placeholder="密碼" style="width: 100%; padding: 10px; margin-bottom: 1rem; border: 1px solid #ddd; border-radius: 4px;" autocomplete="current-password">
+                    <input type="text" id="admin-user" placeholder="帳號" style="width: 100%; padding: 10px; margin-bottom: 1rem; border: 1px solid #ddd; border-radius: 4px;">
+                    <input type="password" id="admin-pass" placeholder="密碼" style="width: 100%; padding: 10px; margin-bottom: 1rem; border: 1px solid #ddd; border-radius: 4px;">
                     <button class="btn full-width" id="btn-login" style="width:100%;">登入</button>
-                    <p id="login-error" style="color: red; margin-top: 1rem; display: none;"></p>
+                    <p id="login-error" style="color: red; margin-top: 1rem; display: none;">帳號或密碼錯誤</p>
                  </div>
              </div>
     `;
 
         setTimeout(() => {
             const performLogin = async () => {
-                const email = container.querySelector('#admin-user').value.trim();
-                const password = container.querySelector('#admin-pass').value;
-                const loginError = container.querySelector('#login-error');
-                const loginBtn = container.querySelector('#btn-login');
-
-                if (!email || !password) {
-                    loginError.textContent = '請輸入 Email 和密碼';
-                    loginError.style.display = 'block';
-                    return;
-                }
-
-                loginBtn.disabled = true;
-                loginBtn.textContent = '驗證中...';
-                loginError.style.display = 'none';
-
-                try {
-                    // 🔒 設定旗標，防止 onAuthStateChanged 中 handleUserLogin 重複處理
-                    state.adminLoginInProgress = true;
-
-                    // Step 1: Firebase Auth 驗證
-                    const userCredential = await signInWithEmailAndPassword(auth, email, password);
-                    const uid = userCredential.user.uid;
-
-                    // Step 2: 檢查 Firestore 中的管理員角色
-                    const userDoc = await getDoc(doc(db, 'users', uid));
-                    if (!userDoc.exists() || userDoc.data().role !== 'admin') {
-                        // 非管理員 — 登出並顯示錯誤
-                        state.adminLoginInProgress = false;
-                        await signOut(auth);
-                        loginError.textContent = '此帳號沒有管理員權限';
-                        loginError.style.display = 'block';
-                        loginBtn.disabled = false;
-                        loginBtn.textContent = '登入';
-                        return;
-                    }
-
-                    // Step 3: 設定管理員狀態
-                    const userData = userDoc.data();
+                const u = container.querySelector('#admin-user').value;
+                const p = container.querySelector('#admin-pass').value;
+                if (u === 'admin' && p === 'mitachr') {
                     state.adminLoggedIn = true;
                     state.isAdmin = true;
-                    state.currentUser = {
-                        uid,
-                        userId: userData.employeeId || uid,
-                        ...userData
-                    };
                     sessionStorage.setItem('localAdminUser', 'true');
 
-                    // 載入課程資料
+                    // ✨ 管理員登入後載入課程資料
                     state.loading = true;
                     await fetchCourses();
                     state.loading = false;
 
-                    state.adminLoginInProgress = false;
+                    // Trigger a re-render of the main app container for the admin route
                     renderApp('#admin');
-
-                } catch (e) {
-                    state.adminLoginInProgress = false;
-                    console.error('[Admin Login Error]', e);
-                    loginError.textContent = '登入失敗，請確認 Email 和密碼是否正確';
-                    loginError.style.display = 'block';
-                    loginBtn.disabled = false;
-                    loginBtn.textContent = '登入';
+                } else {
+                    container.querySelector('#login-error').style.display = 'block';
                 }
             };
 
