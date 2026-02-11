@@ -3955,12 +3955,17 @@ function renderAdmin() {
                 </div>
                 
                 
-                <div class="form-group margin-bottom: 1.5rem;">
-                    <label style="display:block; margin-bottom:0.5rem; font-weight:bold;">權限設定</label>
-                    <label style="cursor: pointer; display: flex; align-items: center; gap: 8px;">
-                        <input type="checkbox" id="edit-newcomer-access" ${editingUser.newcomerAccess ? 'checked' : ''} style="transform: scale(1.2);">
-                        開放新人專區 (Newcomer Zone)
-                    </label>
+                <div class="form-group margin-bottom: 2rem;">
+                    <div style="background: #f8f9fa; padding: 1.5rem; border-radius: 8px; border: 1px solid #e9ecef; box-shadow: 0 2px 4px rgba(0,0,0,0.02);">
+                        <label style="display:block; margin-bottom:1rem; font-weight:bold; font-size: 1.1rem; color: #495057;">權限設定</label>
+                        <div style="display: flex; align-items: start;">
+                            <input type="checkbox" id="edit-newcomer-access" ${editingUser.newcomerAccess ? 'checked' : ''} style="width: 20px; height: 20px; cursor: pointer; margin-right: 12px; margin-top: 2px;">
+                            <div>
+                                <label for="edit-newcomer-access" style="cursor: pointer; font-weight: 600; font-size: 1rem; color: #212529; margin-bottom: 0; display: block;">開放新人專區 (Newcomer Zone)</label>
+                                <div style="font-size: 0.85rem; color: #6c757d; margin-top: 4px; line-height: 1.4;">啟用此選項後，該學員將可存取「新人訓練專區」中的專屬課程。此權限適用於新進員工或需補訓人員。</div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
 
                 <div class="flex justify-end gap-2">
