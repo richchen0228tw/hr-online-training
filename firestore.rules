@@ -19,12 +19,11 @@ service cloud.firestore {
     // ========================================
     match /users/{userId} {
       // 讀取：登入使用者只能讀自己的資料，管理員可讀全部
-      allow read: if isAuthenticated() &&
-        (request.auth.uid == userId || isAdmin());
+      allow read: if isAuthenticated();
 
-      // 建立：登入使用者可建立自己的文件
+      // 建立：登入使用者可建立自己的文件，或管理員可建立
       allow create: if isAuthenticated() &&
-        request.auth.uid == userId;
+        (request.auth.uid == userId || isAdmin());
 
       // 更新：自己可更新自己的資料，管理員可更新任何人
       allow update: if isAuthenticated() &&
@@ -38,18 +37,26 @@ service cloud.firestore {
     // 使用者學習進度
     // ========================================
     match /userProgress/{docId} {
-      // 讀取：擁有者或管理員
-      allow read: if isAuthenticated() &&
-        (resource.data.userId == request.auth.uid || isAdmin());
+      // Helper function to get employeeId from the users collection using auth.uid
+      function getEmployeeId() {
+        return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.employeeId;
+      }
 
-      // 建立 & 更新：擁有者（userId 必須匹配）
-      allow create: if isAuthenticated() &&
-        request.resource.data.userId == request.auth.uid;
+      // Check if the target userId matches either the auth.uid OR the user's Employee ID
+      function isOwner(targetUserId) {
+        return targetUserId == request.auth.uid || targetUserId == getEmployeeId();
+      }
 
-      allow update: if isAuthenticated() &&
-        (resource.data.userId == request.auth.uid || isAdmin());
+      // Read
+      allow read: if isAuthenticated() && (resource == null || isOwner(resource.data.userId) || isAdmin());
 
-      // 刪除：僅管理員
+      // Create
+      allow create: if isAuthenticated() && (isOwner(request.resource.data.userId) || isAdmin());
+
+      // Update
+      allow update: if isAuthenticated() && (isOwner(resource.data.userId) || isAdmin());
+
+      // Delete
       allow delete: if isAdmin();
     }
 

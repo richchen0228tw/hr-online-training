@@ -348,18 +348,23 @@ const AuthManager = {
                 // 嘗試用 email 比對，找到則遷移
                 let legacyDoc = null;
                 if (firebaseUser.email) {
-                    const usersRef = collection(db, 'users');
-                    const emailQuery = query(usersRef, where('email', '==', firebaseUser.email.toLowerCase()));
-                    const emailSnap = await getDocs(emailQuery);
-                    if (!emailSnap.empty) {
-                        // 找到 email 相符的舊版紀錄
-                        for (const d of emailSnap.docs) {
-                            const s = d.data().status;
-                            if (d.id !== firebaseUser.uid && (!s || s === 'active')) {
-                                legacyDoc = d;
-                                break;
+                    try {
+                        const usersRef = collection(db, 'users');
+                        const emailQuery = query(usersRef, where('email', '==', firebaseUser.email.toLowerCase()));
+                        const emailSnap = await getDocs(emailQuery);
+                        if (!emailSnap.empty) {
+                            // 找到 email 相符的舊版紀錄
+                            for (const d of emailSnap.docs) {
+                                const s = d.data().status;
+                                if (d.id !== firebaseUser.uid && (!s || s === 'active')) {
+                                    legacyDoc = d;
+                                    break;
+                                }
                             }
                         }
+                    } catch (err) {
+                        console.warn('[v5 Auth] Failed to query legacy users by email:', err);
+                        // Ignore error and proceed as new user
                     }
                 }
 
@@ -970,6 +975,7 @@ const AuthManager = {
                 if (!state.currentUser) state.currentUser = {};
                 state.currentUser.uid = uid;
                 state.currentUser.employeeId = rawId;
+                state.currentUser.userId = rawId; // ✨ Fix: Update usage ID to employeeId immediately
                 state.currentUser.userName = name;
                 if (pendingCreateData) {
                     Object.assign(state.currentUser, pendingCreateData);
