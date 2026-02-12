@@ -1932,6 +1932,13 @@ function renderNewcomerZone() {
 }
 
 async function renderCourseDetail(id) {
+    // 🛡️ 安全修正：輸入驗證 (Input Validation)
+    // 嚴格限制 ID 只能包含英數字、底線與連字號，防止特殊字元注入
+    if (!/^[a-zA-Z0-9_-]+$/.test(id)) {
+        console.error(`[Security] Invalid Course ID format: ${id}`);
+        return createErrorView('無效的課程 ID (Invalid Course ID)');
+    }
+
     const course = state.courses.find(c => c.id === id);
 
     // 1. Check restriction
@@ -1970,10 +1977,22 @@ async function renderCourseDetail(id) {
             const savedUnitCount = unitProgressData.length;
 
             if (currentUnitCount > savedUnitCount) {
-                console.log(`[進度同步] 課程有 ${currentUnitCount} 個單元,但進度只有 ${savedUnitCount} 筆,自動補齊`);
+                const missingCount = currentUnitCount - savedUnitCount;
+                console.log(`[進度同步] 課程有 ${currentUnitCount} 個單元, 但進度只有 ${savedUnitCount} 筆. 需同步 ${missingCount} 筆.`);
 
-                // 補齊缺少的單元進度
-                for (let i = savedUnitCount; i < currentUnitCount; i++) {
+                // 🛡️ 安全修正：迴圈條件檢查 (Loop Condition Check)
+                // 設定安全上限，防止惡意的大量迴圈導致 DoS
+                const MAX_SYNC_BATCH = 50;
+                let limit = currentUnitCount;
+
+                if (missingCount > MAX_SYNC_BATCH) {
+                    console.warn(`[Security] 嘗試同步過多單元: ${missingCount}. 限制單次同步為 ${MAX_SYNC_BATCH} 筆.`);
+                    limit = savedUnitCount + MAX_SYNC_BATCH;
+                    // 提示使用者可能需要重新整理以完成全部同步，或自動批次處理 (此處簡化為分批載入)
+                }
+
+                // 補齊缺少的單元進度 (Loop limit applied)
+                for (let i = savedUnitCount; i < limit; i++) {
                     const part = course.parts[i];
                     unitProgressData.push({
                         unitIndex: i,
