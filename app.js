@@ -604,7 +604,14 @@ const AuthManager = {
         const secondaryAuth = (await import("./lib/firebase/firebase-auth.js")).getAuth(secondaryApp);
 
         try {
-            const tempPassword = Math.random().toString(36).slice(-8) + "Aa1!";
+            const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
+            let randomStr = "";
+            const values = new Uint32Array(8);
+            window.crypto.getRandomValues(values);
+            for (let i = 0; i < 8; i++) {
+                randomStr += chars[values[i] % chars.length];
+            }
+            const tempPassword = randomStr + "Aa1!";
             let uid;
             let isNewUser = true;
 

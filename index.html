@@ -25,6 +25,21 @@
 
     <!-- Firebase SDKs (Compat version for easier standalone usage or Modular) -->
     <!-- Using Modular from CDN for modern conveniences -->
+
+    <!-- Framebusting Script (Clickjacking Protection) -->
+    <style id="anti-clickjack">
+        html {
+            display: none !important;
+        }
+    </style>
+    <script type="text/javascript">
+        if (self === top) {
+            var antiClickjack = document.getElementById("anti-clickjack");
+            antiClickjack.parentNode.removeChild(antiClickjack);
+        } else {
+            top.location = self.location;
+        }
+    </script>
 </head>
 
 <body>
