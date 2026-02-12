@@ -1058,10 +1058,47 @@ async function initializeUser() {
 
     if (stored) {
         try {
-            state.currentUser = JSON.parse(stored);
-            return true;
+            // ✨ 資料最小化修正：從 sessionStorage 讀取 ID 後，即時從資料庫讀取最新資料
+            const sessionData = JSON.parse(stored);
+
+            // 優先使用 uid (v5)，若無則使用 userId (舊版)
+            let userDocId = sessionData.uid;
+
+            // 如果沒有 uid，嘗試透過 userId (employeeId) 查找
+            if (!userDocId && sessionData.userId) {
+                // 舊版邏輯：假設 userId 可能是 Doc ID
+                userDocId = sessionData.userId;
+            }
+
+            if (userDocId) {
+                const userRef = doc(db, "users", userDocId);
+                const userSnap = await getDoc(userRef);
+
+                if (userSnap.exists()) {
+                    const freshUserData = userSnap.data();
+
+                    // 組合完整用戶資料
+                    state.currentUser = {
+                        uid: userDocId,
+                        userId: freshUserData.employeeId || freshUserData.userId || userDocId,
+                        ...freshUserData
+                    };
+                    console.log('[App] User session restored from Firestore:', state.currentUser.userName);
+                    return true;
+                } else {
+                    // 找不到使用者資料 (可能被刪除)，清除 Invalid Session
+                    console.warn('[App] Stored user ID not found in DB, clearing session.');
+                    sessionStorage.removeItem('hr_training_user');
+                }
+            } else {
+                // Session 資料格式錯誤
+                console.warn('[App] Invalid session data format, clearing.');
+                sessionStorage.removeItem('hr_training_user');
+            }
+
         } catch (e) {
             console.error('解析使用者資訊失敗', e);
+            sessionStorage.removeItem('hr_training_user');
         }
     }
 
@@ -1178,8 +1215,16 @@ function showUserDialog() {
         };
 
         const finishLogin = (user) => {
-            sessionStorage.setItem('hr_training_user', JSON.stringify(user));
-            state.currentUser = user;
+            // ✨ 資料最小化安全修正：僅儲存識別 ID，不含 PII
+            // 原始完整 user 物件包含 email, userName 等敏感資訊，不應存入 sessionStorage
+            const safeSessionData = {
+                uid: user.uid,
+                // userId 可能是 employeeId 或 uid (兼容舊版)，用於識別身分
+                userId: user.userId || user.employeeId || user.uid
+            };
+
+            sessionStorage.setItem('hr_training_user', JSON.stringify(safeSessionData));
+            state.currentUser = user; // 記憶體中仍保留完整資料供本次 Session 使用
             document.body.removeChild(overlay);
             resolve(true);
 
@@ -4971,4 +5016,4 @@ async function renderArchivesView(container) {
         console.error('[Archives] Error loading archived users:', e);
         workspace.innerHTML = `<p style="color:red; text-align:center;">載入失敗: ${e.message}</p>`;
     }
-}
+}
