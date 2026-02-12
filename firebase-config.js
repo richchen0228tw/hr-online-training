@@ -1,6 +1,9 @@
 // Import the functions you need from the SDKs you need
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
-import { getFirestore } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+import { initializeApp } from "./lib/firebase/firebase-app.js";
+import {
+    getFirestore,
+    collection, getDocs, addDoc, updateDoc, doc, deleteDoc, query, where, setDoc, getDoc, writeBatch
+} from "./lib/firebase/firebase-firestore.js";
 import {
     getAuth,
     GoogleAuthProvider,
@@ -13,7 +16,7 @@ import {
     sendEmailVerification,
     confirmPasswordReset,
     verifyPasswordResetCode
-} from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+} from "./lib/firebase/firebase-auth.js";
 
 // Firebase project configuration
 const firebaseConfig = {
@@ -29,6 +32,7 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 const auth = getAuth(app);
+
 const googleProvider = new GoogleAuthProvider();
 
 export {
@@ -43,5 +47,6 @@ export {
     sendPasswordResetEmail,
     sendEmailVerification,
     confirmPasswordReset,
-    verifyPasswordResetCode
+    verifyPasswordResetCode,
+    collection, getDocs, addDoc, updateDoc, doc, deleteDoc, query, where, setDoc, getDoc, writeBatch
 };

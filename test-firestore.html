@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Firestore Test</title>
+</head>
+
+<body>
+    <h1>Firestore Test</h1>
+    <script type="module">
+        import { initializeApp } from "./lib/firebase/firebase-app.js";
+        import { getFirestore } from "./lib/firebase/firebase-firestore.js";
+        import { getAuth } from "./lib/firebase/firebase-auth.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyBwQ8SNvJ_VcLkN9Bx7bop8OYU4fnRlpbM",
+            authDomain: "hr-online-training.firebaseapp.com",
+            projectId: "hr-online-training",
+            storageBucket: "hr-online-training.firebasestorage.app",
+            messagingSenderId: "194233859387",
+            appId: "1:194233859387:web:4bd4b9be5a7cf4d1050b1e"
+        };
+
+        try {
+            console.log("Initializing App...");
+            const app = initializeApp(firebaseConfig);
+            console.log("App initialized:", app);
+
+            console.log("Getting Firestore...");
+            const db = getFirestore(app);
+            console.log("Firestore initialized:", db);
+
+            console.log("Getting Auth...");
+            const auth = getAuth(app);
+            console.log("Auth initialized:", auth);
+
+            document.body.innerHTML += "<p style='color:green'>Success!</p>";
+        } catch (e) {
+            console.error("Error:", e);
+            document.body.innerHTML += "<p style='color:red'>Error: " + e.message + "</p>";
+        }
+    </script>
+</body>
+
+</html>
