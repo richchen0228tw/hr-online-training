@@ -11,6 +11,47 @@ function escapeHtml(str) {
     return div.innerHTML;
 }
 
+// 🔒 XSS 防護：驗證 CSS 顏色
+function isValidColor(color) {
+    if (!color) return false;
+    const s = new Option().style;
+    s.color = color;
+    return s.color !== '';
+}
+
+// 🔒 XSS 防護：安全建立 DOM 元素
+function createElement(tag, attributes = {}, children = []) {
+    const element = document.createElement(tag);
+
+    // 設定屬性
+    Object.entries(attributes).forEach(([key, value]) => {
+        if (key === 'style' && typeof value === 'object') {
+            Object.entries(value).forEach(([k, v]) => element.style[k] = v);
+        } else if (key.startsWith('on') && typeof value === 'function') {
+            element.addEventListener(key.substring(2).toLowerCase(), value);
+        } else if (value !== false && value !== null && value !== undefined) {
+            element.setAttribute(key, value);
+        }
+    });
+
+    // 加入子元素
+    const appendChild = (child) => {
+        if (typeof child === 'string' || typeof child === 'number') {
+            element.appendChild(document.createTextNode(String(child)));
+        } else if (child instanceof HTMLElement) {
+            element.appendChild(child);
+        }
+    };
+
+    if (Array.isArray(children)) {
+        children.forEach(appendChild);
+    } else {
+        appendChild(children);
+    }
+
+    return element;
+}
+
 // 🔒 生產環境關閉 console.log/debug 輸出，避免洩露內部資訊
 if (location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
     console.log = () => { };
@@ -1737,7 +1778,8 @@ function renderHome() {
     coursesToRender.forEach(async (course) => {
         const card = document.createElement('div');
         card.className = 'course-card';
-        card.style.borderTop = `5px solid ${course.color || '#0ABAB5'}`;
+        const safeColor = isValidColor(course.color) ? course.color : '#0ABAB5';
+        card.style.borderTop = `5px solid ${safeColor}`;
 
         // 載入進度資料
         let progressHtml = '';
@@ -1753,7 +1795,7 @@ function renderHome() {
                             <span style="color: #666;">${progress.completionRate}%</span>
                         </div>
                         <div class="progress-bar">
-                            <div class="progress-fill" style="width: ${progress.completionRate}%; background-color: ${course.color || '#0ABAB5'};"></div>
+                            <div class="progress-fill" style="width: ${progress.completionRate}%; background-color: ${safeColor};"></div>
                         </div>
                     </div>
                 `;
@@ -1765,7 +1807,7 @@ function renderHome() {
             <div class="course-meta">${course.parts ? course.parts.length : 0} 個單元</div>
             ${progressHtml}
             <div class="course-meta" style="font-size:0.8rem; margin-top:0.5rem; color:#888;">\r\n                線上開放: ${escapeHtml(course.startDate || '未設定')} ~ ${escapeHtml(course.endDate || '未設定')}\r\n                ${course.actualStartDate ? `<br>實際課程: ${escapeHtml(course.actualStartDate)} ~ ${escapeHtml(course.actualEndDate || '')}` : ''}\r\n                ${course.courseHours ? `<br>時數: ${escapeHtml(String(course.courseHours))} 小時` : ''}\r\n            </div>
-            <a href="#course/${course.id}" class="btn" style="background-color: ${course.color || '#0ABAB5'}">進入課程</a>
+            <a href="#course/${course.id}" class="btn" style="background-color: ${safeColor}">進入課程</a>
         `;
         grid.appendChild(card);
     });
@@ -1800,7 +1842,8 @@ function renderNewcomerZone() {
     coursesToRender.forEach(async (course) => {
         const card = document.createElement('div');
         card.className = 'course-card';
-        card.style.borderTop = `5px solid ${course.color || '#E91E63'}`;
+        const safeColor = isValidColor(course.color) ? course.color : '#E91E63';
+        card.style.borderTop = `5px solid ${safeColor}`;
 
         // 載入進度資料
         let progressHtml = '';
@@ -1816,7 +1859,7 @@ function renderNewcomerZone() {
                             <span style="color: #666;">${progress.completionRate}%</span>
                         </div>
                         <div class="progress-bar">
-                            <div class="progress-fill" style="width: ${progress.completionRate}%; background-color: ${course.color || '#E91E63'};"></div>
+                            <div class="progress-fill" style="width: ${progress.completionRate}%; background-color: ${safeColor};"></div>
                         </div>
                     </div>
                 `;
@@ -1830,7 +1873,7 @@ function renderNewcomerZone() {
             <div class="course-meta" style="font-size:0.8rem; margin-top:0.5rem; color:#888;">
                 ${course.courseHours ? `時數: ${escapeHtml(String(course.courseHours))} 小時` : ''}
             </div>
-            <a href="#course/${course.id}" class="btn" style="background-color: ${course.color || '#E91E63'}">進入課程</a>
+            <a href="#course/${course.id}" class="btn" style="background-color: ${safeColor}">進入課程</a>
         `;
         grid.appendChild(card);
     });
@@ -1865,7 +1908,7 @@ async function renderCourseDetail(id) {
         return createErrorView('您沒有權限觀看此課程');
     }
 
-    const themeColor = course.color || '#0ABAB5';
+    const themeColor = isValidColor(course.color) ? course.color : '#0ABAB5';
     const div = document.createElement('div');
 
     // 載入或初始化進度
@@ -2222,8 +2265,12 @@ async function renderCourseDetail(id) {
             if (!unitProgressData[index].viewCount) unitProgressData[index].viewCount = 0;
             unitProgressData[index].viewCount++;
 
-            if (part.type === 'quiz') {
-                // Render Quiz Button (No iframe - direct link)
+            if (part.type === 'quiz' || part.type === 'satisfaction_survey') {
+                const isSurvey = part.type === 'satisfaction_survey';
+                const typeTitle = isSurvey ? "課後滿意度" : "課後測驗";
+                const startBtnText = isSurvey ? "🚀 開始填寫" : "🚀 開始測驗";
+
+                // Render Quiz/Survey Button
                 if (part.url) {
                     contentDisplay.style.background = 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)';
                     contentDisplay.innerHTML = `
@@ -2245,16 +2292,15 @@ async function renderCourseDetail(id) {
                                 max-width: 500px;
                             ">
                                 <div style="font-size: 4rem; margin-bottom: 1.5rem;">📝</div>
-                                <h2 style="color: #333; margin-bottom: 1rem;">課後測驗</h2>
+                                <h2 style="color: #333; margin-bottom: 1rem;">${typeTitle}</h2>
                                 <p style="color: #666; margin-bottom: 2rem; line-height: 1.6;">
-                                    請點擊下方按鈕在新視窗開啟測驗<br>
-                                    完成測驗後請回到本頁面標記為已完成
+                                    請點擊下方按鈕在新視窗開啟表單<br>
+                                    完成後請回到本頁面標記為已完成
                                 </p>
                                 
                                 <button 
                                     class="btn" 
                                     onclick="
-                                        const now = Date.now();
                                         window.open('${part.url}', '_blank', 'width=1000,height=800');
                                         
                                         // 啟動倒數計時與啟用按鈕機制
@@ -2271,7 +2317,7 @@ async function renderCourseDetail(id) {
                                                     clearInterval(timer);
                                                     markBtn.disabled = false;
                                                     markBtn.style.backgroundColor = '#4CAF50';
-                                                    markBtn.textContent = '✓ 標記測驗已完成';
+                                                    markBtn.textContent = '✓ 標記為已完成';
                                                 } else {
                                                     markBtn.textContent = '⏳ 請稍候 ' + timeLeft + ' 秒...';
                                                 }
@@ -2292,7 +2338,7 @@ async function renderCourseDetail(id) {
                                     onmouseover="this.style.transform='translateY(-2px)'"
                                     onmouseout="this.style.transform='translateY(0)'"
                                 >
-                                    🚀 開始測驗
+                                    ${startBtnText}
                                 </button>
                                 
                                 <button 
@@ -2309,45 +2355,45 @@ async function renderCourseDetail(id) {
                                         cursor: not-allowed;
                                         transition: background-color 0.3s;
                                     "
-                                    title="請先點擊上方按鈕開啟測驗"
+                                    title="請先點擊上方按鈕開啟"
                                 >
-                                    ⚠️ 請先開啟測驗
+                                    ⚠️ 請先開啟表單
                                 </button>
                                 
                                 <p style="color: #999; font-size: 0.85rem; margin-top: 1.5rem;">
-                                    💡 提示：點擊「開始測驗」後，需等待 10 秒才能標記完成
+                                    💡 提示：點擊「開始」後，需等待 10 秒才能標記完成
                                 </p>
                             </div>
                         </div>
                     `;
 
-                    // 標記測驗完成
+                    // 標記完成
                     setTimeout(() => {
                         const markBtn = contentDisplay.querySelector('#mark-quiz-complete');
                         if (markBtn) {
                             markBtn.onclick = async () => {
-                                // 防呆邏輯：驗證碼檢查
-                                const requiredCode = part.verificationCode ? String(part.verificationCode).trim() : '';
+                                // 防呆邏輯：驗證碼檢查 (僅 Quiz 需要)
+                                if (!isSurvey) {
+                                    const requiredCode = part.verificationCode ? String(part.verificationCode).trim() : '';
 
-                                if (requiredCode) {
-                                    const userCode = prompt('此測驗需要輸入驗證碼才能完成。\n請輸入驗證碼（通常顯示於測驗表單最後）：');
-                                    if (!userCode || userCode.trim().toLowerCase() !== requiredCode.toLowerCase()) {
-                                        alert('❌ 驗證碼錯誤，請重新確認！');
-                                        return;
-                                    }
-                                } else {
-                                    // 基本防呆：二次確認
-                                    // 檢查按鈕狀態是否允許
-                                    if (markBtn.innerText.includes('請稍候')) {
-                                        alert('⏳ 請完整參與測驗後再標記完成！');
-                                        return;
-                                    }
-
-                                    if (!confirm('您確認已經填寫並送出測驗表單了嗎？')) {
-                                        return;
+                                    if (requiredCode) {
+                                        const userCode = prompt('此測驗需要輸入驗證碼才能完成。\n請輸入驗證碼（通常顯示於測驗表單最後）：');
+                                        if (!userCode || userCode.trim().toLowerCase() !== requiredCode.toLowerCase()) {
+                                            alert('❌ 驗證碼錯誤，請重新確認！');
+                                            return;
+                                        }
                                     }
                                 }
 
+                                // 基本防呆：二次確認
+                                if (markBtn.innerText.includes('請稍候')) {
+                                    alert('⏳ 請完整參與後再標記完成！');
+                                    return;
+                                }
+
+                                if (!confirm('您確認已經填寫並送出表單了嗎？')) {
+                                    return;
+                                }
 
                                 await markUnitCompleted(state.currentUser.userId, id, course.title, index, unitProgressData, true);
                                 btn.innerHTML = btn.textContent.replace(' ✓', '') + ' <span style="color: #4CAF50;">✓</span>';
@@ -2363,7 +2409,7 @@ async function renderCourseDetail(id) {
                     }, 100);
                 } else {
                     contentDisplay.style.background = '#f8f9fa';
-                    contentDisplay.innerHTML = `<div style="color:#666; padding:2rem;">尚未設定測驗網址</div>`;
+                    contentDisplay.innerHTML = `<div style="color:#666; padding:2rem;">尚未設定網址</div>`;
                 }
             } else {
                 // Render Video
@@ -2576,17 +2622,23 @@ async function renderCourseDetail(id) {
 }
 
 function createErrorView(msg, showHomeBtn = true) {
-    const div = document.createElement('div');
-    div.style.textAlign = 'center';
-    div.style.padding = '4rem 1rem';
+    const children = [
+        createElement('h2', {
+            style: { color: '#ff6b6b', marginBottom: '2rem' }
+        }, msg)
+    ];
 
-    const btnHtml = showHomeBtn ? '<a href="#home" class="btn" style="background-color: #6c757d;">&larr; 回首頁</a>' : '';
+    if (showHomeBtn) {
+        children.push(createElement('a', {
+            href: '#home',
+            class: 'btn',
+            style: { backgroundColor: '#6c757d' }
+        }, '\u2190 回首頁'));
+    }
 
-    div.innerHTML = `
-        <h2 style="color: #ff6b6b; margin-bottom: 2rem;">${msg}</h2>
-        ${btnHtml}
-    `;
-    return div;
+    return createElement('div', {
+        style: { textAlign: 'center', padding: '4rem 1rem' }
+    }, children);
 }
 
 // 學習進度查詢頁面
@@ -2778,7 +2830,7 @@ async function renderProgress(targetUserId = null) {
             `;
 
             for (const { progress, course } of monthsInYear[month]) {
-                const themeColor = course?.color || '#0ABAB5';
+                const themeColor = isValidColor(course?.color) ? course.color : '#0ABAB5';
                 const statusColor = progress.status === 'completed' ? '#4CAF50' :
                     progress.status === 'in-progress' ? '#FF9800' : '#999';
                 const statusText = progress.status === 'completed' ? '已完成' :
@@ -3357,58 +3409,144 @@ function renderAdmin() {
 
                     const courseUrl = `${window.location.origin}${window.location.pathname}#course/${course.id}`;
 
-                    row.innerHTML = `
-                        <div style="margin-right: 15px;">
-                            <input type="checkbox" class="course-checkbox" value="${course.id}" style="transform: scale(1.3); cursor: pointer;">
-                        </div>
-                       <div class="flex items-center" style="flex: 1;">
-                           <div style="width: 16px; height: 16px; border-radius: 50%; background: ${course.color || '#ccc'}; margin-right: 1rem; flex-shrink:0;"></div>
-                           <div>
-                               <div style="font-weight: bold; font-size: 1.05rem; margin-bottom: 0.2rem;">
-                                   ${course.title} ${statusHtml}
-                               </div>
-                               <div style="font-size: 0.85rem; color: #666;">
-                                   開放: ${course.startDate || '-'} ~ ${course.endDate || '-'}${course.actualStartDate ? ` | 實際: ${course.actualStartDate} ~ ${course.actualEndDate || '-'}` : ''}
-                               </div>
-                           </div>
-                       </div>
-                       <div class="flex gap-2">
-                            <button class="btn view-stats-btn" style="background: #17a2b8; color: white; font-size: 0.8rem; padding: 4px 8px;">查看進度</button>
-                            <button class="btn copy-link-btn" data-url="${courseUrl}" style="background: #e9ecef; color: #333; font-size: 0.8rem; padding: 4px 8px;">複製連結</button>
-                            <button class="btn edit-btn" style="font-size: 0.8rem; padding: 4px 8px;">編輯</button>
-                            <button class="btn delete-btn" style="background-color: #dc3545; color: white; font-size: 0.8rem; padding: 4px 8px;">刪除</button>
-                        </div>
-                    `;
+                    // 1. Checkbox Wrapper
+                    const checkboxWrapper = document.createElement('div');
+                    checkboxWrapper.style.marginRight = '15px';
 
-                    // Checkbox handler
-                    row.querySelector('.course-checkbox').onchange = () => {
+                    const checkbox = document.createElement('input');
+                    checkbox.type = 'checkbox';
+                    checkbox.className = 'course-checkbox';
+                    checkbox.value = course.id;
+                    checkbox.style.transform = 'scale(1.3)';
+                    checkbox.style.cursor = 'pointer';
+                    // Re-attach event listener logic later or attaches here
+                    checkbox.onchange = () => {
                         const anyChecked = document.querySelectorAll('.course-checkbox:checked').length > 0;
                         const btn = document.getElementById('btn-batch-delete');
                         if (btn) btn.style.display = anyChecked ? 'block' : 'none';
                     };
+                    checkboxWrapper.appendChild(checkbox);
 
-                    row.querySelector('.view-stats-btn').onclick = async () => {
+                    // 2. Info Wrapper
+                    const infoWrapper = document.createElement('div');
+                    infoWrapper.className = 'flex items-center';
+                    infoWrapper.style.flex = '1';
+
+                    // Color Dot
+                    const colorDot = document.createElement('div');
+                    colorDot.style.width = '16px';
+                    colorDot.style.height = '16px';
+                    colorDot.style.borderRadius = '50%';
+                    colorDot.style.background = course.color || '#ccc';
+                    colorDot.style.marginRight = '1rem';
+                    colorDot.style.flexShrink = '0';
+                    infoWrapper.appendChild(colorDot);
+
+                    // Text Info Container
+                    const textContainer = document.createElement('div');
+
+                    // Title Row
+                    const titleRow = document.createElement('div');
+                    titleRow.style.fontWeight = 'bold';
+                    titleRow.style.fontSize = '1.05rem';
+                    titleRow.style.marginBottom = '0.2rem';
+
+                    const titleText = document.createTextNode(course.title + ' ');
+                    titleRow.appendChild(titleText);
+
+                    // Status Span
+                    const statusSpan = document.createElement('span');
+                    statusSpan.style.marginLeft = '0.5rem';
+                    statusSpan.style.fontSize = '0.9rem';
+                    if (isOnAir) {
+                        statusSpan.style.color = '#d32f2f';
+                        statusSpan.style.fontWeight = 'bold';
+                        statusSpan.textContent = '● ON AIR';
+                    } else {
+                        statusSpan.style.color = '#999';
+                        statusSpan.textContent = '(已結束)';
+                    }
+                    titleRow.appendChild(statusSpan);
+                    textContainer.appendChild(titleRow);
+
+                    // Date Row
+                    const dateRow = document.createElement('div');
+                    dateRow.style.fontSize = '0.85rem';
+                    dateRow.style.color = '#666';
+                    const dateText = `開放: ${course.startDate || '-'} ~ ${course.endDate || '-'}${course.actualStartDate ? ` | 實際: ${course.actualStartDate} ~ ${course.actualEndDate || '-'}` : ''}`;
+                    dateRow.textContent = dateText;
+                    textContainer.appendChild(dateRow);
+
+                    infoWrapper.appendChild(textContainer);
+
+                    // 3. Actions Wrapper
+                    const actionsWrapper = document.createElement('div');
+                    actionsWrapper.className = 'flex gap-2';
+
+                    // View Stats Button
+                    const viewStatsBtn = document.createElement('button');
+                    viewStatsBtn.className = 'btn view-stats-btn';
+                    viewStatsBtn.style.background = '#17a2b8';
+                    viewStatsBtn.style.color = 'white';
+                    viewStatsBtn.style.fontSize = '0.8rem';
+                    viewStatsBtn.style.padding = '4px 8px';
+                    viewStatsBtn.textContent = '查看進度';
+                    viewStatsBtn.onclick = async () => {
                         const workspace = container.querySelector('#admin-workspace');
                         workspace.innerHTML = '載入中...'; // Quick feedback
                         workspace.innerHTML = '';
                         workspace.appendChild(await renderCourseStats(course.id));
                     };
+                    actionsWrapper.appendChild(viewStatsBtn);
 
-                    row.querySelector('.edit-btn').onclick = () => renderEditor(course);
-                    row.querySelector('.delete-btn').onclick = async () => {
-                        if (confirm(`確定要刪除課程「${course.title}」嗎？\n此動作無法復原。`)) {
-                            await deleteDoc(doc(db, "courses", course.id));
-                            await fetchCourses();
-                            renderCourseList();
-                        }
-                    };
-                    row.querySelector('.copy-link-btn').onclick = (e) => {
+                    // Copy Link Button
+                    const copyLinkBtn = document.createElement('button');
+                    copyLinkBtn.className = 'btn copy-link-btn';
+                    copyLinkBtn.dataset.url = courseUrl; // Safe assignment
+                    copyLinkBtn.style.background = '#e9ecef';
+                    copyLinkBtn.style.color = '#333';
+                    copyLinkBtn.style.fontSize = '0.8rem';
+                    copyLinkBtn.style.padding = '4px 8px';
+                    copyLinkBtn.textContent = '複製連結';
+                    copyLinkBtn.onclick = (e) => {
                         navigator.clipboard.writeText(e.target.dataset.url).then(() => {
                             const original = e.target.textContent;
                             e.target.textContent = 'Copied!';
                             setTimeout(() => e.target.textContent = original, 2000);
                         });
                     };
+                    actionsWrapper.appendChild(copyLinkBtn);
+
+                    // Edit Button
+                    const editBtn = document.createElement('button');
+                    editBtn.className = 'btn edit-btn';
+                    editBtn.style.fontSize = '0.8rem';
+                    editBtn.style.padding = '4px 8px';
+                    editBtn.textContent = '編輯';
+                    editBtn.onclick = () => renderEditor(course);
+                    actionsWrapper.appendChild(editBtn);
+
+                    // Delete Button
+                    const deleteBtn = document.createElement('button');
+                    deleteBtn.className = 'btn delete-btn';
+                    deleteBtn.style.backgroundColor = '#dc3545';
+                    deleteBtn.style.color = 'white';
+                    deleteBtn.style.fontSize = '0.8rem';
+                    deleteBtn.style.padding = '4px 8px';
+                    deleteBtn.textContent = '刪除';
+                    deleteBtn.onclick = async () => {
+                        if (confirm(`確定要刪除課程「${course.title}」嗎？\n此動作無法復原。`)) {
+                            await deleteDoc(doc(db, "courses", course.id));
+                            await fetchCourses();
+                            renderCourseList();
+                        }
+                    };
+                    actionsWrapper.appendChild(deleteBtn);
+
+                    // Assemble Row
+                    row.appendChild(checkboxWrapper);
+                    row.appendChild(infoWrapper);
+                    row.appendChild(actionsWrapper);
 
                     monthContainer.appendChild(row);
                 });
@@ -4134,6 +4272,7 @@ function renderAdmin() {
                 <div class="flex gap-4 mt-4">
                     <button class="btn" id="btn-add-video" style="flex:1; background: transparent; border: 2px dashed var(--primary-color); color: var(--primary-color);">+ 新增單元 (影片)</button>
                     <button class="btn" id="btn-add-quiz" style="flex:1; background: transparent; border: 2px dashed #ff6b6b; color: #ff6b6b;">+ 新增課程測驗</button>
+                    <button class="btn" id="btn-add-survey" style="flex:1; background: transparent; border: 2px dashed #9c27b0; color: #9c27b0;">+ 新增課後滿意度</button>
                 </div>
                 <div class="mt-4 flex justify-between">
                     <button class="btn" style="background: #ccc; color: #333;" id="btn-cancel">取消 / 返回</button>
@@ -4149,18 +4288,26 @@ function renderAdmin() {
             (editingCourse.parts || []).forEach((part, idx) => {
                 if (part.type === 'video') videoCount++;
                 const isQuiz = part.type === 'quiz';
+                const isSurvey = part.type === 'satisfaction_survey';
                 const row = document.createElement('div');
-                row.style.cssText = `background: var(--light-gray); padding: 1rem; margin-bottom: 1rem; border-left: 4px solid ${isQuiz ? '#ff6b6b' : (editingCourse.color || '#0ABAB5')}`;
+                const borderColor = isQuiz ? '#ff6b6b' : isSurvey ? '#9c27b0' : (editingCourse.color || '#0ABAB5');
+                row.style.cssText = `background: var(--light-gray); padding: 1rem; margin-bottom: 1rem; border-left: 4px solid ${borderColor}`;
+
+                const typeLabel = isQuiz ? '測驗' : isSurvey ? '滿意度' : '影片單元';
+                const typeColor = isQuiz ? '#ff6b6b' : isSurvey ? '#9c27b0' : '#666';
 
                 row.innerHTML = `
                         <div class="flex justify-between items-center mb-2">
-                        <h5 style="margin:0;"><span style="background:${isQuiz ? '#ff6b6b' : '#666'}; color:white; padding:2px 6px; border-radius:4px; font-size:0.8rem; margin-right:8px;">${isQuiz ? '測驗' : '影片單元'}</span>${part.title}</h5>
+                        <h5 style="margin:0;"><span style="background:${typeColor}; color:white; padding:2px 6px; border-radius:4px; font-size:0.8rem; margin-right:8px;">${typeLabel}</span>${part.title}</h5>
                         <button class="btn btn-danger delete-unit-btn" data-idx="${idx}" style="padding: 4px 8px; font-size: 0.8rem;">刪除</button>
                     </div>
                         <div class="grid gap-4" style="grid-template-columns: 1fr 1fr;">
-                            <div><label style="font-size:0.9rem">顯示名稱</label><input type="text" class="unit-title-input" data-idx="${idx}" value="${part.title}" /></div>
                             <div>
-                                <label style="font-size:0.9rem">${isQuiz ? 'Google 表單網址' : '影片網址'}</label>
+                                <label style="font-size:0.9rem">顯示名稱</label>
+                                <input type="text" class="unit-title-input" data-idx="${idx}" value="${part.title}" ${isSurvey ? 'readonly style="background:#f0f0f0; cursor:not-allowed;"' : ''} />
+                            </div>
+                            <div>
+                                <label style="font-size:0.9rem">${(isQuiz || isSurvey) ? 'Google 表單網址' : '影片網址'}</label>
                                 <input type="text" class="unit-url-input" data-idx="${idx}" value="${part.url || ''}" />
                                 ${isQuiz ? `
                                     <div style="margin-top:0.5rem;">
@@ -4307,6 +4454,10 @@ function renderAdmin() {
         };
         editorCard.querySelector('#btn-add-quiz').onclick = () => {
             editingCourse.parts.push({ type: 'quiz', title: '課後測驗', url: '' });
+            renderUnits();
+        };
+        editorCard.querySelector('#btn-add-survey').onclick = () => {
+            editingCourse.parts.push({ type: 'satisfaction_survey', title: '課後滿意度', url: '' });
             renderUnits();
         };
 
@@ -4820,4 +4971,4 @@ async function renderArchivesView(container) {
         console.error('[Archives] Error loading archived users:', e);
         workspace.innerHTML = `<p style="color:red; text-align:center;">載入失敗: ${e.message}</p>`;
     }
-}
+}

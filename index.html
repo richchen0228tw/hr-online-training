@@ -4,6 +4,15 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="
+        default-src 'self';
+        script-src 'self' https://www.youtube.com https://s.ytimg.com https://www.gstatic.com https://apis.google.com 'unsafe-inline';
+        style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
+        font-src 'self' https://fonts.gstatic.com;
+        img-src 'self' data: https:;
+        frame-src 'self' https://www.youtube.com https://apis.google.com https://accounts.google.com https://hr-online-training.firebaseapp.com;
+        connect-src 'self' https://*.googleapis.com https://*.firebaseio.com https://*.cloudfunctions.net https://www.gstatic.com https://hr-online-training.firebaseapp.com;
+    ">
     <title>線上教育訓練系統</title>
     <link rel="icon" type="image/png" href="images/favicon.png">
     <!-- Google Fonts: Noto Sans TC -->
